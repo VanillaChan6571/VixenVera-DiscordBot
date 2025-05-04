@@ -6,6 +6,10 @@ const config = require('./config');
 const { isUserContentAllowed } = require('./levelingSystem');
 const sharp = require('sharp');
 
+// Helper functions for UGC path handling
+const path = require('path');
+const fs = require('fs');
+
 // Create a Map to store active upload sessions
 // Key: userId, Value: { type, guildId, timeout, isStaff }
 const activeSessions = new Map();
@@ -16,10 +20,13 @@ const contentDimensions = {
     avatar: { width: 512, height: 512 }
 };
 
-// Function to ensure UGC directories exist
+/**
+ * Create directories for UGC storage if they don't exist
+ * @returns {string} Base UGC directory path
+ */
 function ensureDirectoriesExist() {
-    // Use the main ugc directory at root level
-    const baseDir = path.join(__dirname, '../ugc');
+    // Root-level ugc directory based on the file structure you showed
+    const baseDir = path.resolve(__dirname, '../ugc');
     const types = ['avatars', 'banners'];
 
     if (!fs.existsSync(baseDir)) {
@@ -31,12 +38,42 @@ function ensureDirectoriesExist() {
         const typeDir = path.join(baseDir, type);
         if (!fs.existsSync(typeDir)) {
             fs.mkdirSync(typeDir, { recursive: true });
-            console.log(`Created UGC type directory: ${typeDir}`);
+            console.log(`Created UGC ${type} directory: ${typeDir}`);
         }
     }
 
     console.log('UGC directories initialized');
     return baseDir;
+}
+
+/**
+ * Generate file path for uploaded content
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ * @param {string} type - Content type (avatar, banner)
+ * @param {boolean} isStaff - Whether this is a staff upload
+ * @returns {object} File information
+ */
+function generateUGCPath(userId, guildId, type, isStaff = false) {
+    // Ensure the type has 's' at the end (avatars, banners)
+    const typePlural = type.endsWith('s') ? type : `${type}s`;
+
+    // Generate unique filename
+    const fileName = `${isStaff ? 'guild' : userId}_${guildId}_${Date.now()}.png`;
+
+    // Create paths
+    const ugcDir = path.resolve(__dirname, '../ugc', typePlural);
+    const filePath = path.join(ugcDir, fileName);
+
+    // URL path for accessing the file
+    const urlPath = `/ugc/${typePlural}/${fileName}`;
+
+    return {
+        fileName,
+        ugcDir,
+        filePath,
+        urlPath
+    };
 }
 
 // When creating file paths for uploads, change:
@@ -292,11 +329,26 @@ function getGuildDefaultPath(db, type, guildId) {
     }
 }
 
+/**
+ * Helper function to get the URL path for where a file should be stored in DB
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ * @param {string} type - Content type
+ * @param {boolean} isStaff - Whether this is a staff upload
+ * @returns {string} URL path
+ */
+function getUGCUrlPath(userId, guildId, type, isStaff = false) {
+    const { urlPath } = generateUGCPath(userId, guildId, type, isStaff);
+    return urlPath;
+}
+
 module.exports = {
     handleUploadRequest,
     processUploadedImage,
     getUserUGCPath,
     getGuildDefaultPath,
     activeSessions,
-    ensureDirectoriesExist
+    ensureDirectoriesExist,
+    generateUGCPath,
+    getUGCUrlPath
 };

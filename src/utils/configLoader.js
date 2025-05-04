@@ -1,4 +1,4 @@
-// Configuration loader utility
+// Configuration loader utility (CommonJS Compatible)
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
@@ -26,7 +26,7 @@ function loadConfig(configPath, allowEnvOverride = true) {
             return {};
         }
 
-        // Read and parse YAML
+        // Read and parse YAML - using synchronous method
         const fileContents = fs.readFileSync(fullPath, 'utf8');
         let config = yaml.load(fileContents);
 
@@ -51,7 +51,7 @@ function loadConfig(configPath, allowEnvOverride = true) {
  */
 function overrideFromEnv(config) {
     // Create a deep copy to avoid modifying the original
-    let result = JSON.parse(JSON.stringify(config));
+    let result = JSON.parse(JSON.stringify(config || {}));
 
     // For Express config specifically
     if (process.env.HTTP_PORT) {

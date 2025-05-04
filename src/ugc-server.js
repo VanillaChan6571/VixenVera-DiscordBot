@@ -1,17 +1,17 @@
-// Express server for serving UGC files
+// Express server for serving UGC files (CommonJS Compatible)
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { loadConfig } = require('./utils/configLoader');
+const yaml = require('js-yaml');
 
 // Initialize the Express server for UGC serving
 function initializeUGCServer() {
-    // Load Express configuration
+    // Default config
     const defaultConfig = {
         port: 3000,
         public_url: 'http://localhost:3000',
         content: {
-            ugc_dir: '../ugc', // Changed to match your actual directory structure
+            ugc_dir: '../ugc',
             ugc_path: '/ugc'
         },
         security: {
@@ -20,30 +20,35 @@ function initializeUGCServer() {
                 'image/jpeg',
                 'image/png',
                 'image/gif',
-                'image/webp',
-                'image/jpg'
+                'image/webp'
             ]
         }
     };
 
-    // Load config from file with environment variable overrides
-    let expressConfig;
+    // Load config from file - using synchronous methods to avoid top-level await
+    let expressConfig = {};
     try {
-        expressConfig = loadConfig('express.yml');
-        console.log('Loaded Express configuration from YAML file');
+        const configPath = path.resolve(__dirname, 'config/express.yml');
+        if (fs.existsSync(configPath)) {
+            const fileContents = fs.readFileSync(configPath, 'utf8');
+            expressConfig = yaml.load(fileContents);
+            console.log('Loaded Express configuration from YAML file');
+        } else {
+            console.warn('Express config file not found:', configPath);
+            console.warn('Using default configuration');
+        }
     } catch (error) {
         console.warn('Could not load Express configuration from file:', error.message);
         console.warn('Using default configuration');
-        expressConfig = {};
     }
 
     // Merge with defaults
     const config = { ...defaultConfig, ...expressConfig };
 
     // Extract configuration values
-    const PORT = config.port;
-    const BASE_URL = config.public_url;
-    const UGC_DIR = path.resolve(__dirname, config.content.ugc_dir);
+    const PORT = process.env.UGC_PORT || config.port;
+    const BASE_URL = process.env.UGC_URL || config.public_url;
+    const UGC_DIR = path.resolve(__dirname, '..', 'ugc');
     const UGC_PATH = config.content.ugc_path;
 
     console.log('UGC Directory Path:', UGC_DIR);
