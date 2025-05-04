@@ -54,16 +54,11 @@ class LevelingDatabase {
     // Set up performance pragmas
     setupPragmas() {
         try {
-            // Begin transaction for setting pragmas
-            this.db.pragma('begin');
-
-            // Apply all configured pragmas
+            // Apply all configured pragmas individually
+            // No need for begin/commit as these are direct pragma settings
             for (const [key, value] of Object.entries(this.config.pragmas)) {
                 this.db.pragma(`${key} = ${value}`);
             }
-
-            // Commit transaction
-            this.db.pragma('commit');
 
             console.log('Database pragmas configured for optimal performance');
         } catch (error) {
