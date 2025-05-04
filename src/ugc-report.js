@@ -1,5 +1,15 @@
-// UGC reporting functionality
-const { EmbedBuilder, ApplicationCommandOptionType } = require('discord.js');
+// UGC reporting functionality with form-based approach
+const {
+    EmbedBuilder,
+    ApplicationCommandOptionType,
+    ActionRowBuilder,
+    StringSelectMenuBuilder,
+    TextInputBuilder,
+    ModalBuilder,
+    TextInputStyle,
+    ButtonBuilder,
+    ButtonStyle
+} = require('discord.js');
 
 // Add the report option to UGC command definitions
 function extendUGCCommands(existingDefinitions) {
@@ -16,6 +26,16 @@ function extendUGCCommands(existingDefinitions) {
             if (!hasReport) {
                 typeOption.choices.push({ name: 'Report Content', value: 'report' });
             }
+        }
+
+        // Add user parameter for the report command
+        if (!ugcCommand.options.find(opt => opt.name === 'user')) {
+            ugcCommand.options.push({
+                name: 'user',
+                description: 'User whose content you want to report',
+                type: ApplicationCommandOptionType.User,
+                required: false
+            });
         }
     }
 
@@ -48,91 +68,191 @@ async function handleReportRequest(interaction) {
             });
         }
 
-        // Reply to start the reporting flow
-        await interaction.reply({
-            content: 'Please mention or provide the ID of the user whose content you want to report:',
-            ephemeral: true
-        });
+        // Get user from options
+        const reportedUser = interaction.options.getUser('user');
 
-        // Create a message collector to wait for the user's response
-        const filter = m => m.author.id === interaction.user.id;
-        const responseChannel = await interaction.user.createDM().catch(() => null);
-
-        if (!responseChannel) {
-            return await interaction.followUp({
-                content: 'I wasn\'t able to send you a DM. Please enable DMs from server members and try again.',
+        if (!reportedUser) {
+            return await interaction.reply({
+                content: 'Please specify a user to report using the user parameter.',
                 ephemeral: true
             });
         }
 
-        // Send initial prompt in DM
-        await responseChannel.send('Please mention or provide the ID of the user whose content you want to report:');
+        // Create the report form modal
+        const modal = new ModalBuilder()
+            .setCustomId(`ugc_report_${reportedUser.id}`)
+            .setTitle(`Report ${reportedUser.username}'s Content`);
 
-        const collector = responseChannel.createMessageCollector({ filter, time: 60000, max: 1 });
+        // Content type selection
+        const contentTypeInput = new TextInputBuilder()
+            .setCustomId('content_type')
+            .setLabel('What content are you reporting?')
+            .setPlaceholder('1 for Banner, 2 for Avatar')
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(1)
+            .setMaxLength(1)
+            .setRequired(true);
 
-        collector.on('collect', async msg => {
-            // Try to extract a user mention or ID
-            let targetUserId = msg.content.trim();
+        // Violation type selection
+        const violationTypeInput = new TextInputBuilder()
+            .setCustomId('violation_type')
+            .setLabel('Violation type (1-8, see below)')
+            .setPlaceholder('1:Sexual, 2:Child Exploitation, 3:Violence, 4:Hate, 5:Bullying, 6:Spam, 7:Graphic, 8:Stolen')
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(1)
+            .setMaxLength(1)
+            .setRequired(true);
 
-            // Check if it's a mention
-            const mentionMatch = targetUserId.match(/<@!?(\d+)>/);
-            if (mentionMatch) {
-                targetUserId = mentionMatch[1];
-            }
+        // Source link (for copyright claims)
+        const sourceLinkInput = new TextInputBuilder()
+            .setCustomId('source_link')
+            .setLabel('Source link (only for stolen work/option 8)')
+            .setPlaceholder('Leave blank if not reporting stolen content')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false);
 
-            // Validate it's a valid user ID
-            if (!/^\d+$/.test(targetUserId)) {
-                return await msg.reply('Please provide a valid user ID or mention. To get a user ID, right-click on their name with Developer Mode enabled and select "Copy ID".');
-            }
+        // Confirmation for serious reports
+        const confirmationInput = new TextInputBuilder()
+            .setCustomId('confirmation')
+            .setLabel('For option 2 ONLY: Type 1 or 2 to confirm')
+            .setPlaceholder('1:I don\'t read but agree, 2:I read and agree. Leave blank if not option 2.')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false);
 
-            // Ask for the reason
-            await msg.reply('Please describe the issue with the user\'s content:');
+        // Additional details
+        const detailsInput = new TextInputBuilder()
+            .setCustomId('details')
+            .setLabel('Extra Details')
+            .setPlaceholder('Provide any additional information for the admins')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(false);
 
-            // Create another collector for the reason
-            const reasonCollector = responseChannel.createMessageCollector({ filter, time: 120000, max: 1 });
+        // Add inputs to the modal
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(contentTypeInput),
+            new ActionRowBuilder().addComponents(violationTypeInput),
+            new ActionRowBuilder().addComponents(sourceLinkInput),
+            new ActionRowBuilder().addComponents(confirmationInput),
+            new ActionRowBuilder().addComponents(detailsInput)
+        );
 
-            reasonCollector.on('collect', async reasonMsg => {
-                const reason = reasonMsg.content;
+        // Show the modal
+        await interaction.showModal(modal);
+
+        // Wait for modal submission
+        const filter = i => i.customId === `ugc_report_${reportedUser.id}` && i.user.id === interaction.user.id;
+
+        try {
+            const submission = await interaction.awaitModalSubmit({ filter, time: 300000 }); // 5 minute timeout
+
+            if (submission) {
+                // Get form values
+                const contentType = submission.fields.getTextInputValue('content_type');
+                const violationType = submission.fields.getTextInputValue('violation_type');
+                const sourceLink = submission.fields.getTextInputValue('source_link') || 'Not provided';
+                const confirmation = submission.fields.getTextInputValue('confirmation') || 'Not provided';
+                const details = submission.fields.getTextInputValue('details') || 'No additional details provided';
+
+                // Map content type to text
+                const contentTypeText = {
+                    '1': 'Banner',
+                    '2': 'Avatar'
+                }[contentType] || 'Unknown';
+
+                // Map violation type to text
+                const violationTypeText = {
+                    '1': 'Sexual Content',
+                    '2': 'Child Exploitation & Endangerment',
+                    '3': 'Violence and/or Gore',
+                    '4': 'Hate Speech',
+                    '5': 'Bullying',
+                    '6': 'Self Advertising/Ad/Spam',
+                    '7': 'Unwanted Graphic Content',
+                    '8': 'Stolen Work/Trademark/Copyright Issue'
+                }[violationType] || 'Unknown';
 
                 // Create the report embed
                 const reportEmbed = new EmbedBuilder()
-                    .setColor('#ff0000')
-                    .setTitle('Content Report')
+                    .setColor(violationType === '2' ? '#FF0000' : '#ff9900') // Red for serious reports, orange for others
+                    .setTitle(`Content Report - ${violationTypeText}`)
                     .addFields(
-                        { name: 'Reported User', value: `<@${targetUserId}> (ID: ${targetUserId})` },
+                        { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
                         { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
-                        { name: 'Reason', value: reason }
+                        { name: 'Content Type', value: contentTypeText },
+                        { name: 'Violation Type', value: violationTypeText }
                     )
                     .setFooter({ text: `Submitted: ${new Date().toISOString()}` });
+
+                // Add source link field if it's a copyright claim
+                if (violationType === '8' && sourceLink !== 'Not provided') {
+                    reportEmbed.addFields({ name: 'Source Link', value: sourceLink });
+                }
+
+                // Add confirmation field if it's a serious report
+                if (violationType === '2') {
+                    const confirmationText = {
+                        '1': 'User did not read but agreed anyway',
+                        '2': 'User read and agreed'
+                    }[confirmation] || 'No confirmation provided';
+
+                    reportEmbed.addFields({ name: 'User Confirmation', value: confirmationText });
+                }
+
+                // Add details field
+                reportEmbed.addFields({ name: 'Additional Details', value: details });
 
                 // Send the report to the designated channel
                 await reportChannel.send({ embeds: [reportEmbed] });
 
-                // Confirm to the user
-                await reasonMsg.reply('Your report has been submitted to the moderators. Thank you for helping keep the server appropriate!');
+                // Special handling for child exploitation reports
+                if (violationType === '2') {
+                    try {
+                        // Get the owner's ID from config or settings
+                        const ownerId = config.bot.ownerId || db.getGuildSetting(guildId, 'owner_id', null);
 
-                // Notify in the original channel too
-                await interaction.followUp({
-                    content: 'Your report has been submitted successfully.',
-                    ephemeral: true
-                });
-            });
+                        if (ownerId) {
+                            const owner = await interaction.client.users.fetch(ownerId);
 
-            reasonCollector.on('end', collected => {
-                if (collected.size === 0) {
-                    msg.reply('Report cancelled due to timeout. Please try again if you still want to submit a report.');
+                            if (owner) {
+                                // Create escalation embed
+                                const escalationEmbed = new EmbedBuilder()
+                                    .setColor('#FF0000')
+                                    .setTitle('⚠️ URGENT: Child Exploitation Report ⚠️')
+                                    .setDescription('A user has reported content that may contain child exploitation material. This requires immediate attention.')
+                                    .addFields(
+                                        { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
+                                        { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
+                                        { name: 'Content Type', value: contentTypeText },
+                                        { name: 'Additional Details', value: details },
+                                        { name: 'Server', value: interaction.guild.name },
+                                        { name: 'Required Actions', value: 'Please investigate immediately. If confirmed, report to Discord Trust & Safety and consider contacting authorities.' }
+                                    )
+                                    .setFooter({ text: `Escalated: ${new Date().toISOString()}` });
+
+                                // Send DM to owner
+                                await owner.send({ embeds: [escalationEmbed] });
+
+                                console.log(`Escalated child exploitation report to owner: ${ownerId}`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Failed to escalate serious report to owner:', error);
+                    }
                 }
-            });
-        });
 
-        collector.on('end', collected => {
-            if (collected.size === 0) {
-                interaction.followUp({
-                    content: 'Report cancelled due to timeout. Please try again if you still want to submit a report.',
+                // Confirm submission to the user
+                await submission.reply({
+                    content: 'Your report has been submitted. Thank you for helping maintain community standards.',
                     ephemeral: true
                 });
             }
-        });
+        } catch (error) {
+            if (error.code === 'InteractionCollectorError') {
+                console.log('Modal timed out');
+            } else {
+                console.error('Error processing modal submission:', error);
+            }
+        }
     } catch (error) {
         console.error('Error handling report request:', error);
         await interaction.reply({
