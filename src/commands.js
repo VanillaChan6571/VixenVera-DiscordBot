@@ -1,10 +1,12 @@
 // Slash command definitions and handlers
 const { ApplicationCommandOptionType, EmbedBuilder } = require('discord.js');
-const { LevelingDB, createProgressBar } = require('./levelingSystem');
+const { createProgressBar } = require('./levelingSystem');
 const config = require('./config');
+const LevelingDatabase = require('./database');
 
-// Initialize database
-const db = new LevelingDB();
+// We'll initialize the database in index.js and pass it to the handlers
+// This is just a reference declaration to prevent errors
+let db;
 
 // Command definitions for registration
 const commandDefinitions = [
@@ -52,97 +54,142 @@ const commandDefinitions = [
     }
 ];
 
+// Initialize database reference (will be set from index.js)
+function setDatabase(database) {
+    db = database;
+    console.log('Command handlers connected to database');
+}
+
 // Command handlers
 const commandHandlers = {
     // Level/Rank command handler
     async level(interaction) {
-        const targetUser = interaction.options.getUser('user') || interaction.user;
-        const userId = targetUser.id;
-
-        // Get user data
-        const userData = db.getUser(userId);
-        const currentXP = userData.xp;
-        const currentLevel = userData.level;
-        const nextLevelXP = db.xpForLevel(currentLevel + 1);
-        const xpNeeded = nextLevelXP - currentXP;
-
-        // Calculate progress
-        const progressPercentage = Math.floor((currentXP / nextLevelXP) * 100);
-        const progressBar = createProgressBar(progressPercentage);
-
-        // Create embed
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle(`${targetUser.username}'s Level`)
-            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-            .addFields(
-                { name: 'Level', value: currentLevel.toString(), inline: true },
-                { name: 'XP', value: `${currentXP}/${nextLevelXP}`, inline: true }
-            );
-
-        // Add rank position if enabled
-        if (config.leaderboard.showGlobalRank) {
-            const rank = db.getUserRank(userId);
-            if (rank) {
-                embed.addFields({ name: 'Rank', value: `#${rank}`, inline: true });
-            }
+        if (!db) {
+            await interaction.reply({
+                content: 'Database is not initialized. Please try again later.',
+                ephemeral: true
+            });
+            return;
         }
 
-        // Add progress bar
-        embed.addFields({
-            name: 'Progress to Next Level',
-            value: `${progressBar} ${progressPercentage}%`
-        });
+        const targetUser = interaction.options.getUser('user') || interaction.user;
+        const userId = targetUser.id;
+        const guildId = interaction.guild.id;
 
-        // Add footer
-        embed.setFooter({ text: `${xpNeeded} XP needed for next level` })
-            .setTimestamp();
+        try {
+            // Get user data
+            const userData = db.getUser(userId, guildId);
+            const currentXP = userData.xp;
+            const currentLevel = userData.level;
+            const nextLevelXP = db.xpForLevel(currentLevel + 1);
+            const xpNeeded = nextLevelXP - currentXP;
 
-        await interaction.reply({ embeds: [embed] });
+            // Calculate progress
+            const progressPercentage = Math.floor((currentXP / nextLevelXP) * 100);
+            const progressBar = createProgressBar(progressPercentage);
+
+            // Create embed
+            const embed = new EmbedBuilder()
+                .setColor('#0099ff')
+                .setTitle(`${targetUser.username}'s Level`)
+                .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+                .addFields(
+                    { name: 'Level', value: currentLevel.toString(), inline: true },
+                    { name: 'XP', value: `${currentXP}/${nextLevelXP}`, inline: true }
+                );
+
+            // Add rank position if enabled
+            if (config.leaderboard.showGlobalRank) {
+                const rank = db.getUserRank(userId, guildId);
+                if (rank) {
+                    embed.addFields({ name: 'Rank', value: `#${rank}`, inline: true });
+                }
+            }
+
+            // Add progress bar
+            embed.addFields({
+                name: 'Progress to Next Level',
+                value: `${progressBar} ${progressPercentage}%`
+            });
+
+            // Add footer
+            embed.setFooter({ text: `${xpNeeded} XP needed for next level` })
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [embed] });
+        } catch (error) {
+            console.error('Error in level command:', error);
+            await interaction.reply({
+                content: 'There was an error processing your request.',
+                ephemeral: true
+            });
+        }
     },
 
     // Leaderboard command handler
     async leaderboard(interaction) {
-        const page = interaction.options.getInteger('page') || 1;
-
-        // Get leaderboard data
-        const leaderboard = db.getLeaderboard(page);
-
-        if (leaderboard.users.length === 0) {
-            await interaction.reply('No users found on this page of the leaderboard!');
+        if (!db) {
+            await interaction.reply({
+                content: 'Database is not initialized. Please try again later.',
+                ephemeral: true
+            });
             return;
         }
 
-        // Defer reply since fetching multiple users might take time
-        await interaction.deferReply();
+        const page = interaction.options.getInteger('page') || 1;
+        const guildId = interaction.guild.id;
 
-        let leaderboardText = '';
+        try {
+            // Get leaderboard data
+            const leaderboard = db.getLeaderboard(page, config.leaderboard.pageSize, guildId);
 
-        // Build leaderboard text
-        for (let i = 0; i < leaderboard.users.length; i++) {
-            const userId = leaderboard.users[i][0];
-            const userData = leaderboard.users[i][1];
-            const position = ((leaderboard.currentPage - 1) * config.leaderboard.pageSize) + i + 1;
+            if (leaderboard.users.length === 0) {
+                await interaction.reply('No users found on this page of the leaderboard!');
+                return;
+            }
 
-            try {
-                const user = await interaction.client.users.fetch(userId);
-                leaderboardText += `**${position}.** ${user.username} - Level ${userData.level} (${userData.xp} XP)\n`;
-            } catch (err) {
-                leaderboardText += `**${position}.** Unknown User - Level ${userData.level} (${userData.xp} XP)\n`;
+            // Defer reply since fetching multiple users might take time
+            await interaction.deferReply();
+
+            let leaderboardText = '';
+
+            // Build leaderboard text
+            for (let i = 0; i < leaderboard.users.length; i++) {
+                const userId = leaderboard.users[i][0];
+                const userData = leaderboard.users[i][1];
+                const position = ((leaderboard.currentPage - 1) * config.leaderboard.pageSize) + i + 1;
+
+                try {
+                    const user = await interaction.client.users.fetch(userId);
+                    leaderboardText += `**${position}.** ${user.username} - Level ${userData.level} (${userData.xp} XP)\n`;
+                } catch (err) {
+                    leaderboardText += `**${position}.** Unknown User - Level ${userData.level} (${userData.xp} XP)\n`;
+                }
+            }
+
+            // Create embed
+            const embed = new EmbedBuilder()
+                .setColor('#0099ff')
+                .setTitle('Level Leaderboard')
+                .setDescription(leaderboardText)
+                .setFooter({
+                    text: `Page ${leaderboard.currentPage}/${leaderboard.totalPages} • ${leaderboard.totalUsers} total users • Keep chatting to earn XP!`
+                })
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
+        } catch (error) {
+            console.error('Error in leaderboard command:', error);
+
+            if (interaction.deferred) {
+                await interaction.editReply('There was an error processing your request.');
+            } else {
+                await interaction.reply({
+                    content: 'There was an error processing your request.',
+                    ephemeral: true
+                });
             }
         }
-
-        // Create embed
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('Level Leaderboard')
-            .setDescription(leaderboardText)
-            .setFooter({
-                text: `Page ${leaderboard.currentPage}/${leaderboard.totalPages} • ${leaderboard.totalUsers} total users • Keep chatting to earn XP!`
-            })
-            .setTimestamp();
-
-        await interaction.editReply({ embeds: [embed] });
     },
 
     // XP Info command handler
@@ -193,5 +240,6 @@ commandHandlers.rank = commandHandlers.level;
 
 module.exports = {
     definitions: commandDefinitions,
-    handlers: commandHandlers
+    handlers: commandHandlers,
+    setDatabase
 };

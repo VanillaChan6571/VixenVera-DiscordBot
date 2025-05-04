@@ -12,6 +12,34 @@ const config = require('./config');
 const { LevelingDB, XPCooldownManager, generateXP } = require('./levelingSystem');
 const { definitions: commandDefinitions, handlers: commandHandlers } = require('./commands');
 
+// Validate critical configuration
+function validateConfig() {
+    let hasErrors = false;
+
+    if (!config.bot.token) {
+        console.error('ERROR: Bot token is missing! Make sure you have a valid .env file with BOT_TOKEN.');
+        hasErrors = true;
+    }
+
+    if (!config.bot.clientId) {
+        console.error('ERROR: Client ID is missing! Make sure you have a valid .env file with CLIENT_ID.');
+        hasErrors = true;
+    }
+
+    if (!config.database.sqlite.path) {
+        console.error('ERROR: Database path is undefined! Check your configuration.');
+        hasErrors = true;
+    }
+
+    return !hasErrors;
+}
+
+// Abort if configuration is invalid
+if (!validateConfig()) {
+    console.error('Critical configuration errors found. Aborting.');
+    process.exit(1);
+}
+
 // Initialize client with required intents
 const client = new Client({
     intents: [
@@ -23,7 +51,15 @@ const client = new Client({
 });
 
 // Initialize database and cooldown manager
-const db = new LevelingDB();
+let db;
+try {
+    db = new LevelingDB();
+    console.log('Database initialized successfully');
+} catch (error) {
+    console.error('Failed to initialize database:', error);
+    process.exit(1);
+}
+
 const cooldownManager = new XPCooldownManager();
 
 // Function to register slash commands
@@ -102,81 +138,105 @@ client.on('messageCreate', async message => {
     // Set new cooldown
     cooldownManager.setCooldown(userId);
 
-    // Give XP to user
-    const xpToAdd = generateXP();
-    const result = db.addXP(userId, xpToAdd);
+    try {
+        // Give XP to user
+        const xpToAdd = generateXP();
+        const result = db.addXP(userId, xpToAdd);
 
-    // Handle level up if it occurred
-    if (result.leveledUp && config.xp.levelUp.enabled) {
-        // Check if level rewards are enabled
-        const newLevel = result.newLevel;
-        let roleAwarded = null;
+        // Handle level up if it occurred
+        if (result.leveledUp && config.xp.levelUp.enabled) {
+            // Check if level rewards are enabled
+            const newLevel = result.newLevel;
+            let roleAwarded = null;
 
-        // Check if there's a role reward for this level
-        if (config.xp.levelUp.rewards[newLevel]) {
-            const roleId = config.xp.levelUp.rewards[newLevel];
-            const role = message.guild.roles.cache.get(roleId);
+            // Check if there's a role reward for this level
+            if (config.xp.levelUp.rewards[newLevel]) {
+                const roleId = config.xp.levelUp.rewards[newLevel];
+                const role = message.guild.roles.cache.get(roleId);
 
-            // Give role if it exists
-            if (role) {
-                try {
-                    await message.member.roles.add(role);
-                    roleAwarded = role;
-                } catch (err) {
-                    console.error(`Failed to add role ${roleId} to user ${userId}:`, err);
+                // Give role if it exists
+                if (role) {
+                    try {
+                        await message.member.roles.add(role);
+                        roleAwarded = role;
+                    } catch (err) {
+                        console.error(`Failed to add role ${roleId} to user ${userId}:`, err);
+                    }
                 }
             }
-        }
 
-        // Create level up message
-        const { EmbedBuilder } = require('discord.js');
-        const levelUpEmbed = new EmbedBuilder()
-            .setColor('#00ff00')
-            .setTitle('Level Up!')
-            .setDescription(
-                `Congratulations ${config.xp.levelUp.pingUser ? message.author : message.author.username}! ` +
-                `You've reached **Level ${newLevel}**!`
-            )
-            .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-            .setTimestamp();
+            // Create level up message
+            const { EmbedBuilder } = require('discord.js');
+            const levelUpEmbed = new EmbedBuilder()
+                .setColor('#00ff00')
+                .setTitle('Level Up!')
+                .setDescription(
+                    `Congratulations ${config.xp.levelUp.pingUser ? message.author : message.author.username}! ` +
+                    `You've reached **Level ${newLevel}**!`
+                )
+                .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+                .setTimestamp();
 
-        // Add role info if a role was awarded
-        if (roleAwarded) {
-            levelUpEmbed.addFields({
-                name: 'Reward Unlocked!',
-                value: `You've been given the ${roleAwarded.name} role!`
-            });
-        }
-
-        // Determine where to send level up message
-        let channel = message.channel;
-
-        // Check for channel override
-        if (config.xp.levelUp.channelOverride) {
-            const overrideChannel = client.channels.cache.get(config.xp.levelUp.channelOverride);
-            if (overrideChannel) {
-                channel = overrideChannel;
+            // Add role info if a role was awarded
+            if (roleAwarded) {
+                levelUpEmbed.addFields({
+                    name: 'Reward Unlocked!',
+                    value: `You've been given the ${roleAwarded.name} role!`
+                });
             }
-        }
 
-        // Send as DM if configured
-        if (config.xp.levelUp.dm) {
-            try {
-                await message.author.send({ embeds: [levelUpEmbed] });
-            } catch (err) {
-                console.error(`Failed to send DM to user ${userId}:`, err);
-                // Fall back to channel if DM fails
+            // Determine where to send level up message
+            let channel = message.channel;
+
+            // Check for channel override
+            if (config.xp.levelUp.channelOverride) {
+                const overrideChannel = client.channels.cache.get(config.xp.levelUp.channelOverride);
+                if (overrideChannel) {
+                    channel = overrideChannel;
+                }
+            }
+
+            // Send as DM if configured
+            if (config.xp.levelUp.dm) {
+                try {
+                    await message.author.send({ embeds: [levelUpEmbed] });
+                } catch (err) {
+                    console.error(`Failed to send DM to user ${userId}:`, err);
+                    // Fall back to channel if DM fails
+                    channel.send({ embeds: [levelUpEmbed] });
+                }
+            } else {
+                // Send in channel
                 channel.send({ embeds: [levelUpEmbed] });
             }
-        } else {
-            // Send in channel
-            channel.send({ embeds: [levelUpEmbed] });
         }
+    } catch (error) {
+        console.error('Error in XP processing:', error);
     }
 });
 
 // Login the bot
-client.login(config.bot.token);
+console.log('Attempting to log in to Discord...');
+client.login(config.bot.token).catch(error => {
+    console.error('Failed to login to Discord:', error);
+    process.exit(1);
+});
+
+// Proper shutdown handling
+function gracefulShutdown() {
+    console.log('Shutting down gracefully...');
+
+    if (db) {
+        db.close();
+    }
+
+    client.destroy();
+    process.exit(0);
+}
+
+// Register shutdown handlers
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
 
 // Error handling for client
 client.on('error', err => {

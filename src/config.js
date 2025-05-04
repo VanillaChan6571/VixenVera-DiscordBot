@@ -1,6 +1,12 @@
 // Leveling Bot Configuration Options
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const path = require('path');
+
+// For debugging
+console.log('Environment variables loaded:');
+console.log('BOT_TOKEN exists:', !!process.env.BOT_TOKEN);
+console.log('CLIENT_ID exists:', !!process.env.CLIENT_ID);
+console.log('DB_FILENAME:', process.env.DB_FILENAME);
 
 module.exports = {
     // Bot configuration
@@ -21,7 +27,8 @@ module.exports = {
         // SQLite configuration
         sqlite: {
             filename: process.env.DB_FILENAME || 'leveling.db',
-            path: path.join(__dirname, process.env.DB_FILENAME || 'leveling.db'),
+            // Store in data directory at project root
+            path: path.resolve(__dirname, '../data', process.env.DB_FILENAME || 'leveling.db'),
 
             // How often to commit changes to disk (ms)
             saveInterval: 10000, // 10 seconds

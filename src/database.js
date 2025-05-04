@@ -17,9 +17,18 @@ class LevelingDatabase {
     // Initialize the database connection and tables
     initialize() {
         try {
+            // Make sure we have a valid path
+            if (!this.config.path) {
+                throw new Error('Database path is undefined. Check your configuration and .env file.');
+            }
+
+            // Log the database path for debugging
+            console.log('Database path:', this.config.path);
+
             // Create directory if it doesn't exist
             const dbDir = path.dirname(this.config.path);
             if (!fs.existsSync(dbDir)) {
+                console.log(`Creating database directory: ${dbDir}`);
                 fs.mkdirSync(dbDir, { recursive: true });
             }
 
@@ -38,53 +47,63 @@ class LevelingDatabase {
             console.log(`Connected to SQLite database: ${this.config.path}`);
         } catch (error) {
             console.error('Error initializing database:', error);
-            process.exit(1);
+            throw error; // Re-throw to make the error visible
         }
     }
 
     // Set up performance pragmas
     setupPragmas() {
-        // Begin transaction for setting pragmas
-        this.db.pragma('begin');
+        try {
+            // Begin transaction for setting pragmas
+            this.db.pragma('begin');
 
-        // Apply all configured pragmas
-        for (const [key, value] of Object.entries(this.config.pragmas)) {
-            this.db.pragma(`${key} = ${value}`);
+            // Apply all configured pragmas
+            for (const [key, value] of Object.entries(this.config.pragmas)) {
+                this.db.pragma(`${key} = ${value}`);
+            }
+
+            // Commit transaction
+            this.db.pragma('commit');
+
+            console.log('Database pragmas configured for optimal performance');
+        } catch (error) {
+            console.error('Error setting up pragmas:', error);
+            throw error;
         }
-
-        // Commit transaction
-        this.db.pragma('commit');
-
-        console.log('Database pragmas configured for optimal performance');
     }
 
     // Create necessary tables
     createTables() {
-        // Create users table
-        this.db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        xp INTEGER NOT NULL DEFAULT 0,
-        level INTEGER NOT NULL DEFAULT 0,
-        last_message INTEGER NOT NULL DEFAULT 0,
-        first_seen INTEGER NOT NULL DEFAULT 0,
-        guild_id TEXT NOT NULL DEFAULT 'global'
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_users_xp ON users(xp DESC);
-      CREATE INDEX IF NOT EXISTS idx_users_level ON users(level DESC);
-      CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id);
-    `);
+        try {
+            // Create users table
+            this.db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+          user_id TEXT PRIMARY KEY,
+          xp INTEGER NOT NULL DEFAULT 0,
+          level INTEGER NOT NULL DEFAULT 0,
+          last_message INTEGER NOT NULL DEFAULT 0,
+          first_seen INTEGER NOT NULL DEFAULT 0,
+          guild_id TEXT NOT NULL DEFAULT 'global'
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_users_xp ON users(xp DESC);
+        CREATE INDEX IF NOT EXISTS idx_users_level ON users(level DESC);
+        CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id);
+      `);
 
-        // Create statistics table for future expansion
-        this.db.exec(`
-      CREATE TABLE IF NOT EXISTS statistics (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    `);
+            // Create statistics table for future expansion
+            this.db.exec(`
+        CREATE TABLE IF NOT EXISTS statistics (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      `);
 
-        console.log('Database tables initialized');
+            console.log('Database tables initialized');
+        } catch (error) {
+            console.error('Error creating tables:', error);
+            throw error;
+        }
     }
 
     // Set up an interval to checkpoint the WAL file
@@ -113,11 +132,15 @@ class LevelingDatabase {
         }
 
         if (this.db) {
-            // Final checkpoint
-            this.db.pragma('wal_checkpoint(FULL)');
-            this.db.close();
-            this.db = null;
-            console.log('Database connection closed');
+            try {
+                // Final checkpoint
+                this.db.pragma('wal_checkpoint(FULL)');
+                this.db.close();
+                this.db = null;
+                console.log('Database connection closed');
+            } catch (error) {
+                console.error('Error closing database:', error);
+            }
         }
     }
 
@@ -125,155 +148,180 @@ class LevelingDatabase {
     ensureUser(userId, guildId = 'global') {
         const now = Date.now();
 
-        // Prepare statements for better performance
-        const getUserStmt = this.db.prepare('SELECT * FROM users WHERE user_id = ? AND guild_id = ?');
-        const insertUserStmt = this.db.prepare(`
-      INSERT INTO users (user_id, xp, level, last_message, first_seen, guild_id)
-      VALUES (?, 0, 0, ?, ?, ?)
-    `);
+        try {
+            // Prepare statements for better performance
+            const getUserStmt = this.db.prepare('SELECT * FROM users WHERE user_id = ? AND guild_id = ?');
+            const insertUserStmt = this.db.prepare(`
+        INSERT INTO users (user_id, xp, level, last_message, first_seen, guild_id)
+        VALUES (?, 0, 0, ?, ?, ?)
+      `);
 
-        // Begin transaction
-        const transaction = this.db.transaction(() => {
-            // Check if user exists
-            const user = getUserStmt.get(userId, guildId);
+            // Begin transaction
+            const transaction = this.db.transaction(() => {
+                // Check if user exists
+                const user = getUserStmt.get(userId, guildId);
 
-            // If not, create them
-            if (!user) {
-                insertUserStmt.run(userId, now, now, guildId);
-            }
+                // If not, create them
+                if (!user) {
+                    insertUserStmt.run(userId, now, now, guildId);
+                }
 
-            // Return the user (either existing or new)
-            return getUserStmt.get(userId, guildId);
-        });
+                // Return the user (either existing or new)
+                return getUserStmt.get(userId, guildId);
+            });
 
-        // Execute transaction
-        return transaction();
+            // Execute transaction
+            return transaction();
+        } catch (error) {
+            console.error('Error ensuring user exists:', error);
+            throw error;
+        }
     }
 
     // Get a user's data
     getUser(userId, guildId = 'global') {
-        return this.ensureUser(userId, guildId);
+        try {
+            return this.ensureUser(userId, guildId);
+        } catch (error) {
+            console.error('Error getting user:', error);
+            throw error;
+        }
     }
 
     // Add XP to user and update level
     addXP(userId, xpAmount, guildId = 'global') {
-        // Ensure the user exists first
-        this.ensureUser(userId, guildId);
+        try {
+            // Ensure the user exists first
+            this.ensureUser(userId, guildId);
 
-        const now = Date.now();
+            const now = Date.now();
 
-        // Prepare statements
-        const updateXPStmt = this.db.prepare(`
-      UPDATE users
-      SET xp = xp + ?,
-          last_message = ?
-      WHERE user_id = ? AND guild_id = ?
-    `);
+            // Prepare statements
+            const updateXPStmt = this.db.prepare(`
+        UPDATE users
+        SET xp = xp + ?,
+            last_message = ?
+        WHERE user_id = ? AND guild_id = ?
+      `);
 
-        const getUserStmt = this.db.prepare(`
-      SELECT *
-      FROM users
-      WHERE user_id = ? AND guild_id = ?
-    `);
+            const getUserStmt = this.db.prepare(`
+        SELECT *
+        FROM users
+        WHERE user_id = ? AND guild_id = ?
+      `);
 
-        const updateLevelStmt = this.db.prepare(`
-      UPDATE users
-      SET level = ?
-      WHERE user_id = ? AND guild_id = ?
-    `);
+            const updateLevelStmt = this.db.prepare(`
+        UPDATE users
+        SET level = ?
+        WHERE user_id = ? AND guild_id = ?
+      `);
 
-        // Execute transaction for atomic operations
-        const transaction = this.db.transaction(() => {
-            // Add XP
-            updateXPStmt.run(xpAmount, now, userId, guildId);
+            // Execute transaction for atomic operations
+            const transaction = this.db.transaction(() => {
+                // Add XP
+                updateXPStmt.run(xpAmount, now, userId, guildId);
 
-            // Get updated user data
-            const userData = getUserStmt.get(userId, guildId);
+                // Get updated user data
+                const userData = getUserStmt.get(userId, guildId);
 
-            // Calculate new level
-            const oldLevel = userData.level;
-            const newLevel = this.calculateLevel(userData.xp);
+                // Calculate new level
+                const oldLevel = userData.level;
+                const newLevel = this.calculateLevel(userData.xp);
 
-            // Update level if it changed
-            if (newLevel > oldLevel) {
-                updateLevelStmt.run(newLevel, userId, guildId);
-                userData.level = newLevel;
-            }
+                // Update level if it changed
+                if (newLevel > oldLevel) {
+                    updateLevelStmt.run(newLevel, userId, guildId);
+                    userData.level = newLevel;
+                }
 
-            return {
-                leveledUp: newLevel > oldLevel,
-                oldLevel,
-                newLevel,
-                currentXP: userData.xp,
-                xpToNextLevel: this.xpForLevel(newLevel + 1) - userData.xp
-            };
-        });
+                return {
+                    leveledUp: newLevel > oldLevel,
+                    oldLevel,
+                    newLevel,
+                    currentXP: userData.xp,
+                    xpToNextLevel: this.xpForLevel(newLevel + 1) - userData.xp
+                };
+            });
 
-        // Run the transaction
-        return transaction();
+            // Run the transaction
+            return transaction();
+        } catch (error) {
+            console.error('Error adding XP:', error);
+            throw error;
+        }
     }
 
     // Get leaderboard data
     getLeaderboard(page = 1, pageSize = config.leaderboard.pageSize, guildId = 'global') {
-        const offset = (page - 1) * pageSize;
+        try {
+            const offset = (page - 1) * pageSize;
 
-        // Get users for this page
-        const getUsersStmt = this.db.prepare(`
-      SELECT user_id, xp, level
-      FROM users
-      WHERE guild_id = ?
-      ORDER BY xp DESC
-      LIMIT ? OFFSET ?
-    `);
+            // Get users for this page
+            const getUsersStmt = this.db.prepare(`
+        SELECT user_id, xp, level
+        FROM users
+        WHERE guild_id = ?
+        ORDER BY xp DESC
+        LIMIT ? OFFSET ?
+      `);
 
-        // Count total users
-        const countUsersStmt = this.db.prepare(`
-      SELECT COUNT(*) as count
-      FROM users
-      WHERE guild_id = ?
-    `);
+            // Count total users
+            const countUsersStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM users
+        WHERE guild_id = ?
+      `);
 
-        // Get users
-        const users = getUsersStmt.all(guildId, pageSize, offset);
+            // Get users
+            const users = getUsersStmt.all(guildId, pageSize, offset);
 
-        // Convert to the expected format (compatible with previous JSON format)
-        const formattedUsers = users.map(user => [
-            user.user_id,
-            { xp: user.xp, level: user.level }
-        ]);
+            // Convert to the expected format (compatible with previous JSON format)
+            const formattedUsers = users.map(user => [
+                user.user_id,
+                { xp: user.xp, level: user.level }
+            ]);
 
-        // Get total count
-        const { count } = countUsersStmt.get(guildId);
-        const totalPages = Math.ceil(count / pageSize);
+            // Get total count
+            const { count } = countUsersStmt.get(guildId);
+            const totalPages = Math.ceil(count / pageSize);
 
-        return {
-            users: formattedUsers,
-            currentPage: page,
-            totalPages,
-            totalUsers: count
-        };
+            return {
+                users: formattedUsers,
+                currentPage: page,
+                totalPages,
+                totalUsers: count
+            };
+        } catch (error) {
+            console.error('Error getting leaderboard:', error);
+            throw error;
+        }
     }
 
     // Get user's rank position
     getUserRank(userId, guildId = 'global') {
-        // Make sure user exists
-        this.ensureUser(userId, guildId);
+        try {
+            // Make sure user exists
+            this.ensureUser(userId, guildId);
 
-        // Get rank
-        const getRankStmt = this.db.prepare(`
-      SELECT (
-        SELECT COUNT(*)
-        FROM users
-        WHERE guild_id = ? AND xp > (
-          SELECT xp
+            // Get rank
+            const getRankStmt = this.db.prepare(`
+        SELECT (
+          SELECT COUNT(*)
           FROM users
-          WHERE user_id = ? AND guild_id = ?
-        )
-      ) + 1 as rank
-    `);
+          WHERE guild_id = ? AND xp > (
+            SELECT xp
+            FROM users
+            WHERE user_id = ? AND guild_id = ?
+          )
+        ) + 1 as rank
+      `);
 
-        const { rank } = getRankStmt.get(guildId, userId, guildId);
-        return rank;
+            const { rank } = getRankStmt.get(guildId, userId, guildId);
+            return rank;
+        } catch (error) {
+            console.error('Error getting user rank:', error);
+            throw error;
+        }
     }
 
     // Calculate required XP for a level
