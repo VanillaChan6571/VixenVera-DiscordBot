@@ -1,0 +1,29 @@
+{
+  "name": "discord-leveling-bot",
+  "version": "1.0.0",
+  "description": "A Discord bot with a customizable leveling system using SQLite",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "leveling",
+    "xp",
+    "levels",
+    "sqlite"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.11.0",
+    "dotenv": "^16.3.1",
+    "sqlite3": "^5.1.6",
+    "better-sqlite3": "^8.5.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
