@@ -12,6 +12,7 @@ const {
 const config = require('./config');
 const { LevelingDB, XPCooldownManager, generateXP } = require('./levelingSystem');
 const { definitions: commandDefinitions, handlers: commandHandlers, setDatabase } = require('./commands');
+const { initializeUGCServer } = require('./ugc-server');
 
 // Validate critical configuration
 function validateConfig() {
@@ -57,11 +58,22 @@ try {
     db = new LevelingDB();
     // Pass database to command handlers
     setDatabase(db);
+    setAdminDatabase(db);
     console.log('Database initialized successfully');
 } catch (error) {
     console.error('Failed to initialize database:', error);
     process.exit(1);
 }
+
+try {
+    const ugcBaseUrl = initializeUGCServer();
+    // Store the base URL on the client so it can be accessed throughout the application
+    client.ugcBaseUrl = ugcBaseUrl;
+    console.log(`UGC server initialized with base URL: ${ugcBaseUrl}`);
+} catch (error) {
+    console.error('Failed to initialize UGC server:', error);
+}
+
 
 const cooldownManager = new XPCooldownManager();
 

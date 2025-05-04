@@ -47,9 +47,38 @@ function generateXP() {
     return Math.floor(Math.random() * (config.xp.max - config.xp.min + 1)) + config.xp.min;
 }
 
+// Helper function to check guild settings for user content permissions
+function isUserContentAllowed(db, feature, guildId) {
+    try {
+        // First check if the feature is set to guild-only mode
+        const guildOnly = db.getGuildSetting(guildId, `guild_only_${feature}`, false);
+        if (guildOnly) {
+            return false;
+        }
+
+        // Then check if the feature is toggled on/off
+        return db.getGuildSetting(guildId, `allow_user_${feature}`, true);
+    } catch (error) {
+        console.error(`Error checking user content permissions for ${feature}:`, error);
+        return true; // Default to allowed if there's an error
+    }
+}
+
+// Helper function to get guild default content for a feature
+function getGuildDefaultContent(db, type, guildId) {
+    try {
+        return db.getGuildSetting(guildId, `default_${type}_url`, null);
+    } catch (error) {
+        console.error(`Error getting guild default content for ${type}:`, error);
+        return null;
+    }
+}
+
 module.exports = {
     LevelingDB: LevelingDatabase,
     XPCooldownManager,
     createProgressBar,
-    generateXP
+    generateXP,
+    isUserContentAllowed,
+    getGuildDefaultContent
 };

@@ -3,6 +3,7 @@ const { ApplicationCommandOptionType, EmbedBuilder } = require('discord.js');
 const { createProgressBar } = require('./levelingSystem');
 const config = require('./config');
 const LevelingDatabase = require('./database');
+const { getUserUGCPath } = require('./ugc');
 
 // We'll initialize the database in index.js and pass it to the handlers
 // This is just a reference declaration to prevent errors
@@ -96,12 +97,30 @@ const commandHandlers = {
             // Create embed
             const embed = new EmbedBuilder()
                 .setColor('#0099ff')
-                .setTitle(`${targetUser.username}'s Level`)
-                .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-                .addFields(
-                    { name: 'Level', value: currentLevel.toString(), inline: true },
-                    { name: 'XP', value: `${currentXP}/${nextLevelXP}`, inline: true }
-                );
+                .setTitle(`${targetUser.username}'s Level`);
+
+            // Check for custom banner
+            const customBanner = getUserUGCPath(db, 'banner', userId, guildId);
+            if (customBanner) {
+                // Set image directly using URL from Express server
+                embed.setImage(customBanner);
+            }
+
+            // Check for custom avatar
+            const customAvatar = getUserUGCPath(db, 'avatar', userId, guildId);
+            if (customAvatar) {
+                // Set thumbnail directly using URL from Express server
+                embed.setThumbnail(customAvatar);
+            } else {
+                // Default to Discord avatar
+                embed.setThumbnail(targetUser.displayAvatarURL({ dynamic: true }));
+            }
+
+            // Add fields
+            embed.addFields(
+                { name: 'Level', value: currentLevel.toString(), inline: true },
+                { name: 'XP', value: `${currentXP}/${nextLevelXP}`, inline: true }
+            );
 
             // Add rank position if enabled
             if (config.leaderboard.showGlobalRank) {

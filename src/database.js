@@ -14,6 +14,123 @@ class LevelingDatabase {
         this.initialize();
     }
 
+    getGuildSetting(guildId, settingKey, defaultValue = null) {
+        try {
+            const stmt = this.db.prepare('SELECT setting_value FROM guild_settings WHERE guild_id = ? AND setting_key = ?');
+            const result = stmt.get(guildId, settingKey);
+
+            if (result) {
+                // Try to parse as JSON if it looks like JSON
+                if (result.setting_value.startsWith('{') || result.setting_value.startsWith('[')) {
+                    try {
+                        return JSON.parse(result.setting_value);
+                    } catch (e) {
+                        // Not valid JSON, return as is
+                        return result.setting_value;
+                    }
+                }
+
+                // Handle boolean values stored as strings
+                if (result.setting_value === 'true') return true;
+                if (result.setting_value === 'false') return false;
+
+                return result.setting_value;
+            }
+
+            return defaultValue;
+        } catch (error) {
+            console.error(`Error getting guild setting ${settingKey}:`, error);
+            return defaultValue;
+        }
+    }
+    // Update a guild setting
+    async updateGuildSetting(guildId, settingKey, settingValue) {
+        try {
+            const now = Date.now();
+
+            // Convert objects or arrays to JSON strings
+            if (typeof settingValue === 'object' && settingValue !== null) {
+                settingValue = JSON.stringify(settingValue);
+            }
+
+            // Convert booleans to strings
+            if (typeof settingValue === 'boolean') {
+                settingValue = settingValue.toString();
+            }
+
+            const stmt = this.db.prepare(`
+            INSERT INTO guild_settings (guild_id, setting_key, setting_value, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, setting_key) DO UPDATE SET
+            setting_value = excluded.setting_value,
+            updated_at = excluded.updated_at
+        `);
+
+            stmt.run(guildId, settingKey, settingValue, now, now);
+
+            return {
+                success: true,
+                guildId,
+                settingKey,
+                settingValue
+            };
+        } catch (error) {
+            console.error(`Error updating guild setting ${settingKey}:`, error);
+            throw error;
+        }
+    }
+
+// Get all settings for a guild
+    getAllGuildSettings(guildId) {
+        try {
+            const stmt = this.db.prepare('SELECT setting_key, setting_value FROM guild_settings WHERE guild_id = ?');
+            const results = stmt.all(guildId);
+
+            const settings = {};
+
+            for (const row of results) {
+                let value = row.setting_value;
+
+                // Try to parse as JSON if it looks like JSON
+                if (value.startsWith('{') || value.startsWith('[')) {
+                    try {
+                        value = JSON.parse(value);
+                    } catch (e) {
+                        // Not valid JSON, keep as is
+                    }
+                }
+
+                // Handle boolean values stored as strings
+                if (value === 'true') value = true;
+                if (value === 'false') value = false;
+
+                settings[row.setting_key] = value;
+            }
+
+            return settings;
+        } catch (error) {
+            console.error('Error getting all guild settings:', error);
+            return {};
+        }
+    }
+
+// Delete a guild setting
+    deleteGuildSetting(guildId, settingKey) {
+        try {
+            const stmt = this.db.prepare('DELETE FROM guild_settings WHERE guild_id = ? AND setting_key = ?');
+            const result = stmt.run(guildId, settingKey);
+
+            return {
+                success: result.changes > 0,
+                guildId,
+                settingKey
+            };
+        } catch (error) {
+            console.error(`Error deleting guild setting ${settingKey}:`, error);
+            throw error;
+        }
+    }
+
     // Initialize the database connection and tables
     initialize() {
         try {
@@ -29,7 +146,7 @@ class LevelingDatabase {
             const dbDir = path.dirname(this.config.path);
             if (!fs.existsSync(dbDir)) {
                 console.log(`Creating database directory: ${dbDir}`);
-                fs.mkdirSync(dbDir, {recursive: true});
+                fs.mkdirSync(dbDir, { recursive: true });
             }
 
             // Connect to the database
@@ -70,78 +187,45 @@ class LevelingDatabase {
     // Create necessary tables
     createTables() {
         try {
-            // Create users table
+            // Create users table with COMPOSITE primary key
             this.db.exec(`
-                CREATE TABLE IF NOT EXISTS users
-                (
-                    user_id
-                    TEXT
-                    PRIMARY
-                    KEY,
-                    xp
-                    INTEGER
-                    NOT
-                    NULL
-                    DEFAULT
-                    0,
-                    level
-                    INTEGER
-                    NOT
-                    NULL
-                    DEFAULT
-                    0,
-                    last_message
-                    INTEGER
-                    NOT
-                    NULL
-                    DEFAULT
-                    0,
-                    first_seen
-                    INTEGER
-                    NOT
-                    NULL
-                    DEFAULT
-                    0,
-                    guild_id
-                    TEXT
-                    NOT
-                    NULL
-                    DEFAULT
-                    'global',
-                    sacrifices
-                    INTEGER
-                    NOT
-                    NULL
-                    DEFAULT
-                    0,
-                    sacrifice_pending
-                    INTEGER
-                    NOT
-                    NULL
-                    DEFAULT
-                    0
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_users_xp ON users(xp DESC);
-                CREATE INDEX IF NOT EXISTS idx_users_level ON users(level DESC);
-                CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id);
-            `);
+        CREATE TABLE IF NOT EXISTS users (
+          user_id TEXT NOT NULL,
+          guild_id TEXT NOT NULL DEFAULT 'global',
+          xp INTEGER NOT NULL DEFAULT 0,
+          level INTEGER NOT NULL DEFAULT 0,
+          last_message INTEGER NOT NULL DEFAULT 0,
+          first_seen INTEGER NOT NULL DEFAULT 0,
+          sacrifices INTEGER NOT NULL DEFAULT 0,
+          sacrifice_pending INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (user_id, guild_id)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_users_xp ON users(xp DESC);
+        CREATE INDEX IF NOT EXISTS idx_users_level ON users(level DESC);
+        CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id);
+      `);
 
             // Create statistics table for future expansion
             this.db.exec(`
-                CREATE TABLE IF NOT EXISTS statistics
-                (
-                    key
-                    TEXT
-                    PRIMARY
-                    KEY,
-                    value
-                    TEXT
-                    NOT
-                    NULL
-                );
-            `);
+        CREATE TABLE IF NOT EXISTS statistics (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      `);
 
+            this.db.exec(`
+    CREATE TABLE IF NOT EXISTS guild_settings
+    (
+        guild_id TEXT NOT NULL,
+        setting_key TEXT NOT NULL,
+        setting_value TEXT,
+        created_at INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (guild_id, setting_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_guild_settings ON guild_settings(guild_id);
+`);
             console.log('Database tables initialized');
         } catch (error) {
             console.error('Error creating tables:', error);
@@ -195,26 +279,23 @@ class LevelingDatabase {
             // Prepare statements for better performance
             const getUserStmt = this.db.prepare('SELECT * FROM users WHERE user_id = ? AND guild_id = ?');
             const insertUserStmt = this.db.prepare(`
-                INSERT INTO users (user_id, xp, level, last_message, first_seen, guild_id)
-                VALUES (?, 0, 0, ?, ?, ?)
-            `);
+        INSERT OR IGNORE INTO users (user_id, guild_id, xp, level, last_message, first_seen)
+        VALUES (?, ?, 0, 0, ?, ?)
+      `);
 
-            // Begin transaction
-            const transaction = this.db.transaction(() => {
-                // Check if user exists
-                const user = getUserStmt.get(userId, guildId);
+            // Check if user exists
+            let user = getUserStmt.get(userId, guildId);
 
-                // If not, create them
-                if (!user) {
-                    insertUserStmt.run(userId, now, now, guildId);
-                }
+            // If not, create them
+            if (!user) {
+                // Use INSERT OR IGNORE to avoid constraint errors
+                insertUserStmt.run(userId, guildId, now, now);
 
-                // Return the user (either existing or new)
-                return getUserStmt.get(userId, guildId);
-            });
+                // Get the user after insertion
+                user = getUserStmt.get(userId, guildId);
+            }
 
-            // Execute transaction
-            return transaction();
+            return user;
         } catch (error) {
             console.error('Error ensuring user exists:', error);
             throw error;
@@ -241,26 +322,23 @@ class LevelingDatabase {
 
             // Prepare statements
             const updateXPStmt = this.db.prepare(`
-                UPDATE users
-                SET xp           = xp + ?,
-                    last_message = ?
-                WHERE user_id = ?
-                  AND guild_id = ?
-            `);
+        UPDATE users
+        SET xp = xp + ?,
+            last_message = ?
+        WHERE user_id = ? AND guild_id = ?
+      `);
 
             const getUserStmt = this.db.prepare(`
-                SELECT *
-                FROM users
-                WHERE user_id = ?
-                  AND guild_id = ?
-            `);
+        SELECT *
+        FROM users
+        WHERE user_id = ? AND guild_id = ?
+      `);
 
             const updateLevelStmt = this.db.prepare(`
-                UPDATE users
-                SET level = ?
-                WHERE user_id = ?
-                  AND guild_id = ?
-            `);
+        UPDATE users
+        SET level = ?
+        WHERE user_id = ? AND guild_id = ?
+      `);
 
             // Execute transaction for atomic operations
             const transaction = this.db.transaction(() => {
@@ -304,19 +382,19 @@ class LevelingDatabase {
 
             // Get users for this page
             const getUsersStmt = this.db.prepare(`
-                SELECT user_id, xp, level
-                FROM users
-                WHERE guild_id = ?
-                ORDER BY xp DESC LIMIT ?
-                OFFSET ?
-            `);
+        SELECT user_id, xp, level
+        FROM users
+        WHERE guild_id = ?
+        ORDER BY xp DESC
+        LIMIT ? OFFSET ?
+      `);
 
             // Count total users
             const countUsersStmt = this.db.prepare(`
-                SELECT COUNT(*) as count
-                FROM users
-                WHERE guild_id = ?
-            `);
+        SELECT COUNT(*) as count
+        FROM users
+        WHERE guild_id = ?
+      `);
 
             // Get users
             const users = getUsersStmt.all(guildId, pageSize, offset);
@@ -324,11 +402,11 @@ class LevelingDatabase {
             // Convert to the expected format (compatible with previous JSON format)
             const formattedUsers = users.map(user => [
                 user.user_id,
-                {xp: user.xp, level: user.level}
+                { xp: user.xp, level: user.level }
             ]);
 
             // Get total count
-            const {count} = countUsersStmt.get(guildId);
+            const { count } = countUsersStmt.get(guildId);
             const totalPages = Math.ceil(count / pageSize);
 
             return {
@@ -351,16 +429,18 @@ class LevelingDatabase {
 
             // Get rank
             const getRankStmt = this.db.prepare(`
-                SELECT (SELECT COUNT(*)
-                        FROM users
-                        WHERE guild_id = ?
-                          AND xp > (SELECT xp
-                                    FROM users
-                                    WHERE user_id = ?
-                                      AND guild_id = ?)) + 1 as rank
-            `);
+        SELECT (
+          SELECT COUNT(*)
+          FROM users
+          WHERE guild_id = ? AND xp > (
+            SELECT xp
+            FROM users
+            WHERE user_id = ? AND guild_id = ?
+          )
+        ) + 1 as rank
+      `);
 
-            const {rank} = getRankStmt.get(guildId, userId, guildId);
+            const { rank } = getRankStmt.get(guildId, userId, guildId);
             return rank;
         } catch (error) {
             console.error('Error getting user rank:', error);
@@ -368,6 +448,7 @@ class LevelingDatabase {
         }
     }
 
+    // Calculate required XP for a level with interpolation
     xpForLevel(level) {
         // Make sure level is within bounds
         const maxLevel = config.xp.maxLevel || 100;
@@ -423,12 +504,12 @@ class LevelingDatabase {
                 return Math.floor(lowerXP + (xpRange * levelProgress / levelRange));
             }
         }
+
         // Fall back to formula
         return config.xp.baseXP * Math.pow(level, config.xp.curve);
     }
 
-
-// Calculate level from XP
+    // Calculate level from XP
     calculateLevel(xp) {
         const maxLevel = config.xp.maxLevel || 100;
 
@@ -445,7 +526,7 @@ class LevelingDatabase {
             // Check if user has enough XP for each level
             let userLevel = 0;
 
-            for (const {level, requiredXP} of levelData) {
+            for (const { level, requiredXP } of levelData) {
                 if (xp >= requiredXP) {
                     userLevel = level;
                 } else {
@@ -487,7 +568,7 @@ class LevelingDatabase {
         return level;
     }
 
-// Add a new method for the sacrifice system
+    // Add a new method for the sacrifice system
     async sacrificeUser(userId, guildId = 'global') {
         try {
             // Get the current user data
@@ -506,14 +587,13 @@ class LevelingDatabase {
             if (userData.sacrifice_pending === 1) {
                 // Perform the sacrifice
                 const sacrificeStmt = this.db.prepare(`
-                    UPDATE users
-                    SET level             = 1,
-                        xp                = ?,
-                        sacrifices        = sacrifices + 1,
-                        sacrifice_pending = 0
-                    WHERE user_id = ?
-                      AND guild_id = ?
-                `);
+          UPDATE users
+          SET level = 1, 
+              xp = ?, 
+              sacrifices = sacrifices + 1,
+              sacrifice_pending = 0
+          WHERE user_id = ? AND guild_id = ?
+        `);
 
                 // Get the XP needed for level 1
                 const level1XP = this.xpForLevel(1);
@@ -529,11 +609,10 @@ class LevelingDatabase {
             } else {
                 // Set pending flag for confirmation
                 const pendingStmt = this.db.prepare(`
-                    UPDATE users
-                    SET sacrifice_pending = 1
-                    WHERE user_id = ?
-                      AND guild_id = ?
-                `);
+          UPDATE users
+          SET sacrifice_pending = 1
+          WHERE user_id = ? AND guild_id = ?
+        `);
 
                 pendingStmt.run(userId, guildId);
 
@@ -566,15 +645,14 @@ class LevelingDatabase {
         }
     }
 
-// Add method to reset sacrifice pending flag (for timeout)
+    // Add method to reset sacrifice pending flag (for timeout)
     resetSacrificePending(userId, guildId = 'global') {
         try {
             const resetStmt = this.db.prepare(`
-                UPDATE users
-                SET sacrifice_pending = 0
-                WHERE user_id = ?
-                  AND guild_id = ?
-            `);
+        UPDATE users
+        SET sacrifice_pending = 0
+        WHERE user_id = ? AND guild_id = ?
+      `);
 
             resetStmt.run(userId, guildId);
             return true;
