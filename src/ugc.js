@@ -5,6 +5,8 @@ const path = require('path');
 const config = require('./config');
 const { isUserContentAllowed } = require('./levelingSystem');
 const sharp = require('sharp');
+const { isUserContentBlacklisted, isUserGloballyBlacklisted } = require('./report-utils');
+const { PermissionFlagsBits } = require('discord.js');
 
 // Create a Map to store active upload sessions
 // Key: userId, Value: { type, guildId, timeout, isStaff }
@@ -48,6 +50,18 @@ async function handleUploadRequest(interaction, type, isStaff = false) {
             if (!isUserContentAllowed(db, type, guildId)) {
                 return await interaction.reply({
                     content: `User ${type}s are not allowed in this server. A server administrator has disabled this feature.`,
+                    ephemeral: true
+                });
+            }
+
+            if (isUserGloballyBlacklisted(db, interaction.user.id)) {
+                return await interaction.reply({
+                    content: `${interaction.user} System has banned you from Uploading Anything regardless if your staff or a normal user. You have been reported by multiple admins or for other reasons. This cannot be reverted.`,
+                    ephemeral: true
+                });
+            } else if (isUserContentBlacklisted(db, interaction.user.id, guildId)) {
+                return await interaction.reply({
+                    content: 'You have been blacklisted from uploading custom content in this server due to previous violations.',
                     ephemeral: true
                 });
             }
@@ -299,11 +313,109 @@ function getGuildDefaultPath(db, type, guildId) {
     }
 }
 
+/**
+ * Handle admin upload request for setting server-wide default content
+ * @param {Object} interaction - The interaction that triggered the command
+ * @param {String} type - Content type (banner/avatar)
+ * @param {String} guildId - Guild ID
+ * @returns {Promise<void>}
+ */
+async function handleAdminUploadRequest(interaction, type, guildId) {
+    try {
+        // Check if user has permissions
+        if (!interaction.memberPermissions.has(PermissionFlagsBits.ManageGuild)) {
+            return await interaction.reply({
+                content: 'You do not have permission to use this command.',
+                ephemeral: true
+            });
+        }
+
+        // Check for global blacklist
+        const db = interaction.client.levelingDB;
+        if (isUserGloballyBlacklisted(db, interaction.user.id)) {
+            return await interaction.reply({
+                content: `${interaction.user} System has banned you from Uploading Anything regardless if your staff or a normal user. You have been reported by multiple admins or for other reasons. This cannot be reverted.`,
+                ephemeral: true
+            });
+        }
+
+        // Check if user already has an active session
+        if (activeSessions.has(interaction.user.id)) {
+            return await interaction.reply({
+                content: 'You already have an active upload session. Please complete that first or wait for it to expire.',
+                ephemeral: true
+            });
+        }
+
+        // Inform the user that we're sending instructions to DM
+        await interaction.reply({
+            content: `I've sent you a DM with instructions on how to upload a server-wide default ${type}!`,
+            ephemeral: true
+        });
+
+        // Create DM channel
+        const dmChannel = await interaction.user.createDM();
+
+        // Create the instruction embed
+        const embed = new EmbedBuilder()
+            .setColor('#ff9900')
+            .setTitle(`Server ${type.charAt(0).toUpperCase() + type.slice(1)} Upload`)
+            .setDescription(`Hello Staff of ${interaction.guild.name}!\n\nYou are uploading a default guild/server ${type} for **${interaction.guild.name}**. This will be used as the default ${type} for all users who haven't uploaded their own content.`)
+            .addFields(
+                {
+                    name: `For ${type}s`,
+                    value: `Reminder, the ideal size of the ${type} should be **${contentDimensions[type].width}x${contentDimensions[type].height}** (Your image will be resized to these dimensions)`
+                },
+                {
+                    name: 'Instructions',
+                    value: `You have 2 minutes to upload the image file. **You can cancel this process by typing "cancel", "exit", or "stop"**`
+                }
+            )
+            .setTimestamp();
+
+        // Send the instructions
+        await dmChannel.send({ embeds: [embed] });
+
+        // Set up session timeout and store session info
+        const sessionTimeout = setTimeout(() => {
+            if (activeSessions.has(interaction.user.id)) {
+                dmChannel.send(`Your ${type} upload session has expired. Feel free to start a new one when you're ready!`);
+                activeSessions.delete(interaction.user.id);
+            }
+        }, 2 * 60 * 1000); // 2 minutes
+
+        // Store session information
+        activeSessions.set(interaction.user.id, {
+            type,
+            guildId: interaction.guild.id,
+            timeout: sessionTimeout,
+            isStaff: true,
+            dmChannel
+        });
+
+    } catch (error) {
+        console.error(`Error starting admin ${type} upload session:`, error);
+
+        if (interaction.deferred || interaction.replied) {
+            await interaction.followUp({
+                content: `There was an error starting your upload session. Make sure your DMs are open and try again later.`,
+                ephemeral: true
+            });
+        } else {
+            await interaction.reply({
+                content: `There was an error starting your upload session. Make sure your DMs are open and try again later.`,
+                ephemeral: true
+            });
+        }
+    }
+}
+
 module.exports = {
     handleUploadRequest,
     processUploadedImage,
     getUserUGCPath,
     getGuildDefaultPath,
     activeSessions,
-    ensureDirectoriesExist
+    ensureDirectoriesExist,
+    handleAdminUploadRequest
 };

@@ -19,6 +19,7 @@ const { processUploadedImage, activeSessions } = require('./ugc');
 // New imports for setup command functionality
 const { definitions: setupCommandDefinitions, handlers: setupCommandHandlers, setDatabase: setSetupDatabase } = require('./commandsSetup');
 const { extendUGCCommands, handleReportRequest } = require('./ugc-report');
+const { setupReportHandlers } = require('./report-utils');
 
 // Validate critical configuration
 function validateConfig() {
@@ -76,6 +77,8 @@ try {
     }
     // Make the database accessible from the client
     client.levelingDB = db;
+    setupReportHandlers(client);
+    console.log('Enhanced report system initialized');
     console.log('Database initialized successfully');
 } catch (error) {
     console.error('Failed to initialize database:', error);

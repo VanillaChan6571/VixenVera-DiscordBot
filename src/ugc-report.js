@@ -1,4 +1,4 @@
-// UGC reporting functionality with hybrid dropdown+modal approach
+// UGC reporting functionality with improved report display and admin actions
 const {
     EmbedBuilder,
     ApplicationCommandOptionType,
@@ -10,6 +10,7 @@ const {
     ButtonBuilder,
     ButtonStyle
 } = require('discord.js');
+const { createContentReportEmbed } = require('./report-utils');
 
 // Add the report option to UGC command definitions
 function extendUGCCommands(existingDefinitions) {
@@ -88,12 +89,12 @@ async function handleReportRequest(interaction) {
                         {
                             label: 'Banner',
                             description: 'Report the user\'s banner image',
-                            value: 'banner',
+                            value: 'Banner',
                         },
                         {
                             label: 'Avatar',
                             description: 'Report the user\'s profile picture',
-                            value: 'avatar',
+                            value: 'Avatar',
                         },
                     ]),
             );
@@ -253,57 +254,49 @@ async function handleReportRequest(interaction) {
                         // Get the details
                         const details = modalSubmission.fields.getTextInputValue('details') || 'No additional details provided';
 
-                        // Get content type and violation type display text
-                        const contentTypeText = contentType === 'banner' ? 'Banner' : 'Avatar';
-                        const violationTypeText = {
-                            'sexual': 'Sexual Content',
-                            'child_exploitation': 'Child Exploitation & Endangerment',
-                            'violence': 'Violence and/or Gore',
-                            'hate': 'Hate Speech',
-                            'bullying': 'Bullying',
-                            'spam': 'Self Advertising/Ad/Spam',
-                            'graphic': 'Unwanted Graphic Content',
-                            'copyright': 'Stolen Work/Trademark/Copyright Issue'
-                        }[violationType] || 'Unknown';
-
-                        // Create the report embed
-                        const reportEmbed = new EmbedBuilder()
-                            .setColor(violationType === 'child_exploitation' ? '#FF0000' : '#ff9900') // Red for serious reports
-                            .setTitle(`Content Report - ${violationTypeText}`)
-                            .addFields(
-                                { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
-                                { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
-                                { name: 'Content Type', value: contentTypeText },
-                                { name: 'Violation Type', value: violationTypeText }
-                            )
-                            .setFooter({ text: `Submitted: ${new Date().toISOString()}` });
-
-                        // Add source link field if it's a copyright claim
+                        // Get source link for copyright claims
+                        let sourceLink = null;
                         if (violationType === 'copyright') {
-                            const sourceLink = modalSubmission.fields.getTextInputValue('source_link');
-                            reportEmbed.addFields({ name: 'Source Link', value: sourceLink });
+                            sourceLink = modalSubmission.fields.getTextInputValue('source_link');
                         }
 
-                        // Add confirmation field if it's a serious report
+                        // Get confirmation for serious reports
+                        let confirmation = null;
                         if (violationType === 'child_exploitation') {
-                            const confirmation = modalSubmission.fields.getTextInputValue('confirmation');
-                            reportEmbed.addFields({ name: 'User Confirmation', value: confirmation });
+                            confirmation = modalSubmission.fields.getTextInputValue('confirmation');
                         }
 
-                        // Add details field
-                        reportEmbed.addFields({ name: 'Additional Details', value: details });
+                        // Use our new enhanced report embed with user history and admin actions
+                        // The createContentReportEmbed function is imported from report-utils.js
+                        const reportOptions = createContentReportEmbed(
+                            modalSubmission,
+                            reportedUser,
+                            contentType,
+                            violationType,
+                            details
+                        );
 
-                        // Send the report to the designated channel
-                        await reportChannel.send({ embeds: [reportEmbed] });
+                        // Add source link for copyright if provided
+                        if (sourceLink && violationType === 'copyright') {
+                            reportOptions.embeds[0].addFields({ name: 'Source Link', value: sourceLink });
+                        }
+
+                        // Add confirmation for serious reports if provided
+                        if (confirmation && violationType === 'child_exploitation') {
+                            reportOptions.embeds[0].addFields({ name: 'User Confirmation', value: confirmation });
+                        }
+
+                        // Send the enhanced report to the designated channel
+                        await reportChannel.send(reportOptions);
 
                         // Special handling for child exploitation reports
                         if (violationType === 'child_exploitation') {
                             try {
                                 // Get the owner's ID
-                                const ownerId = interaction.client.config?.bot?.ownerId || '233055065588367370'; // Fallback to config value
+                                const ownerId = modalSubmission.client.config?.bot?.ownerId || '233055065588367370';
 
                                 if (ownerId) {
-                                    const owner = await interaction.client.users.fetch(ownerId).catch(() => null);
+                                    const owner = await modalSubmission.client.users.fetch(ownerId).catch(() => null);
 
                                     if (owner) {
                                         // Create escalation embed
@@ -313,18 +306,16 @@ async function handleReportRequest(interaction) {
                                             .setDescription('A user has reported content that may contain child exploitation material. This requires immediate attention.')
                                             .addFields(
                                                 { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
-                                                { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
-                                                { name: 'Content Type', value: contentTypeText },
+                                                { name: 'Reported By', value: `${modalSubmission.user} (ID: ${modalSubmission.user.id})` },
+                                                { name: 'Content Type', value: contentType },
                                                 { name: 'Additional Details', value: details },
-                                                { name: 'Server', value: interaction.guild.name },
+                                                { name: 'Server', value: modalSubmission.guild.name },
                                                 { name: 'Required Actions', value: 'Please investigate immediately. If confirmed, report to Discord Trust & Safety and consider contacting authorities.' }
                                             )
                                             .setFooter({ text: `Escalated: ${new Date().toISOString()}` });
 
                                         // Send DM to owner
                                         await owner.send({ embeds: [escalationEmbed] });
-
-                                        console.log(`Escalated child exploitation report to owner: ${ownerId}`);
                                     }
                                 }
                             } catch (error) {
