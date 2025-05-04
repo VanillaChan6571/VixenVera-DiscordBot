@@ -13,146 +13,97 @@ const commandDefinitions = [
         defaultMemberPermissions: PermissionFlagsBits.ManageGuild,
         options: [
             {
-                name: 'reports',
-                description: 'Set up a channel for users to report inappropriate banners/avatars',
-                type: ApplicationCommandOptionType.Subcommand,
-                options: [
-                    {
-                        name: 'channel',
-                        description: 'Channel to use for reports',
-                        type: ApplicationCommandOptionType.Channel,
-                        required: true,
-                        channel_types: [ChannelType.GuildText]
-                    }
+                name: 'feature',
+                description: 'What feature to configure',
+                type: ApplicationCommandOptionType.String,
+                required: true,
+                choices: [
+                    { name: 'Reports Channel', value: 'reports' },
+                    { name: 'Level Up Settings', value: 'levelup' },
+                    { name: 'Level Rewards', value: 'levelrewards' },
+                    { name: 'User Commands Restrictions', value: 'usercommands' },
+                    { name: 'XP Channels', value: 'xpchannels' }
+                ]
+            },
+            // Common options for different features
+            {
+                name: 'channel',
+                description: 'Channel to use (for reports, levelup, or usercommands)',
+                type: ApplicationCommandOptionType.Channel,
+                required: false,
+                channel_types: [ChannelType.GuildText]
+            },
+            {
+                name: 'mode',
+                description: 'Mode setting (for usercommands or xpchannels)',
+                type: ApplicationCommandOptionType.String,
+                required: false,
+                choices: [
+                    { name: 'Enable', value: 'enable' },
+                    { name: 'Disable', value: 'disable' },
+                    { name: 'Whitelist', value: 'whitelist' },
+                    { name: 'Blacklist', value: 'blacklist' }
                 ]
             },
             {
-                name: 'levelup',
-                description: 'Configure level up announcements',
-                type: ApplicationCommandOptionType.Subcommand,
-                options: [
-                    {
-                        name: 'channel',
-                        description: 'Channel to send level up announcements (leave empty to use the channel where XP is earned)',
-                        type: ApplicationCommandOptionType.Channel,
-                        required: false,
-                        channel_types: [ChannelType.GuildText]
-                    },
-                    {
-                        name: 'dm',
-                        description: 'Whether to send level up messages via DM instead',
-                        type: ApplicationCommandOptionType.Boolean,
-                        required: false
-                    },
-                    {
-                        name: 'ping',
-                        description: 'Whether to ping users in level up messages',
-                        type: ApplicationCommandOptionType.Boolean,
-                        required: false
-                    }
+                name: 'channels',
+                description: 'Comma-separated list of channel names/IDs (for xpchannels)',
+                type: ApplicationCommandOptionType.String,
+                required: false
+            },
+            // Level up options
+            {
+                name: 'dm',
+                description: 'Send level up messages via DM (for levelup)',
+                type: ApplicationCommandOptionType.Boolean,
+                required: false
+            },
+            {
+                name: 'ping',
+                description: 'Ping users in level up messages (for levelup)',
+                type: ApplicationCommandOptionType.Boolean,
+                required: false
+            },
+            // Level rewards options
+            {
+                name: 'action',
+                description: 'Action for rewards (add, remove, list)',
+                type: ApplicationCommandOptionType.String,
+                required: false,
+                choices: [
+                    { name: 'Add Reward', value: 'add' },
+                    { name: 'Remove Reward', value: 'remove' },
+                    { name: 'List Rewards', value: 'list' }
                 ]
             },
             {
-                name: 'levelrewards',
-                description: 'Manage level rewards',
-                type: ApplicationCommandOptionType.Subcommand,
-                options: [
-                    {
-                        name: 'action',
-                        description: 'Action to perform',
-                        type: ApplicationCommandOptionType.String,
-                        required: true,
-                        choices: [
-                            { name: 'Add Reward', value: 'add' },
-                            { name: 'Remove Reward', value: 'remove' },
-                            { name: 'List Rewards', value: 'list' }
-                        ]
-                    },
-                    {
-                        name: 'level',
-                        description: 'Level to add/remove reward for (only for add/remove)',
-                        type: ApplicationCommandOptionType.Integer,
-                        required: false,
-                        min_value: 1,
-                        max_value: 100
-                    },
-                    {
-                        name: 'role',
-                        description: 'Role to award (only for add)',
-                        type: ApplicationCommandOptionType.Role,
-                        required: false
-                    },
-                    {
-                        name: 'reward_id',
-                        description: 'ID of reward to remove (or "all" to remove all rewards for level)',
-                        type: ApplicationCommandOptionType.String,
-                        required: false
-                    },
-                    {
-                        name: 'destination',
-                        description: 'Where to send the reward list (only for list)',
-                        type: ApplicationCommandOptionType.String,
-                        required: false,
-                        choices: [
-                            { name: 'DM', value: 'dm' },
-                            { name: 'Current Channel', value: 'channel' }
-                        ]
-                    },
-                    {
-                        name: 'list_channel',
-                        description: 'Channel to send the reward list (only for list with destination=channel)',
-                        type: ApplicationCommandOptionType.Channel,
-                        required: false,
-                        channel_types: [ChannelType.GuildText]
-                    }
-                ]
+                name: 'level',
+                description: 'Level for reward (for levelrewards)',
+                type: ApplicationCommandOptionType.Integer,
+                required: false,
+                min_value: 1,
+                max_value: 100
             },
             {
-                name: 'usercommands',
-                description: 'Restrict user commands to specific channels',
-                type: ApplicationCommandOptionType.Subcommand,
-                options: [
-                    {
-                        name: 'mode',
-                        description: 'How to handle command restrictions',
-                        type: ApplicationCommandOptionType.String,
-                        required: true,
-                        choices: [
-                            { name: 'Enable Restrictions', value: 'enable' },
-                            { name: 'Disable Restrictions', value: 'disable' }
-                        ]
-                    },
-                    {
-                        name: 'channel',
-                        description: 'Channel to allow commands in (required if enabling restrictions)',
-                        type: ApplicationCommandOptionType.Channel,
-                        required: false,
-                        channel_types: [ChannelType.GuildText]
-                    }
-                ]
+                name: 'role',
+                description: 'Role to award (for levelrewards add)',
+                type: ApplicationCommandOptionType.Role,
+                required: false
             },
             {
-                name: 'xpchannels',
-                description: 'Configure which channels can earn XP',
-                type: ApplicationCommandOptionType.Subcommand,
-                options: [
-                    {
-                        name: 'mode',
-                        description: 'Whitelist or Blacklist mode',
-                        type: ApplicationCommandOptionType.String,
-                        required: true,
-                        choices: [
-                            { name: 'Whitelist', value: 'whitelist' },
-                            { name: 'Blacklist', value: 'blacklist' },
-                            { name: 'Disable Filtering', value: 'disable' }
-                        ]
-                    },
-                    {
-                        name: 'channels',
-                        description: 'Comma-separated list of channel names or IDs (e.g. "general,bot-commands,gaming")',
-                        type: ApplicationCommandOptionType.String,
-                        required: false
-                    }
+                name: 'reward_id',
+                description: 'ID of reward to remove (for levelrewards remove)',
+                type: ApplicationCommandOptionType.String,
+                required: false
+            },
+            {
+                name: 'destination',
+                description: 'Where to send reward list (for levelrewards list)',
+                type: ApplicationCommandOptionType.String,
+                required: false,
+                choices: [
+                    { name: 'DM', value: 'dm' },
+                    { name: 'Current Channel', value: 'channel' }
                 ]
             }
         ]
@@ -188,11 +139,11 @@ const commandHandlers = {
             });
         }
 
-        const subcommand = interaction.options.getSubcommand();
+        const feature = interaction.options.getString('feature');
         const guildId = interaction.guild.id;
 
-        // Handle different subcommands
-        switch (subcommand) {
+        // Handle different features
+        switch (feature) {
             case 'reports':
                 return await handleReportsSetup(interaction, guildId);
             case 'levelup':
@@ -205,7 +156,7 @@ const commandHandlers = {
                 return await handleXPChannelsSetup(interaction, guildId);
             default:
                 return await interaction.reply({
-                    content: 'Unknown subcommand. Please try again.',
+                    content: 'Unknown feature. Please try again.',
                     ephemeral: true
                 });
         }
@@ -215,6 +166,13 @@ const commandHandlers = {
 // Handle Reports setup
 async function handleReportsSetup(interaction, guildId) {
     const channel = interaction.options.getChannel('channel');
+
+    if (!channel) {
+        return await interaction.reply({
+            content: 'Please provide a channel for reports.',
+            ephemeral: true
+        });
+    }
 
     try {
         // Update the setting in the database
@@ -243,6 +201,14 @@ async function handleLevelUpSetup(interaction, guildId) {
     const channel = interaction.options.getChannel('channel');
     const dm = interaction.options.getBoolean('dm');
     const ping = interaction.options.getBoolean('ping');
+
+    // Check if at least one option was provided
+    if (channel === null && dm === null && ping === null) {
+        return await interaction.reply({
+            content: 'Please provide at least one setting to update (channel, dm, or ping).',
+            ephemeral: true
+        });
+    }
 
     try {
         // Prepare the settings to update
@@ -298,11 +264,18 @@ async function handleLevelUpSetup(interaction, guildId) {
 // Handle LevelRewards setup
 async function handleLevelRewardsSetup(interaction, guildId) {
     const action = interaction.options.getString('action');
+
+    if (!action) {
+        return await interaction.reply({
+            content: 'Please provide an action (add, remove, or list).',
+            ephemeral: true
+        });
+    }
+
     const level = interaction.options.getInteger('level');
     const role = interaction.options.getRole('role');
     const rewardId = interaction.options.getString('reward_id');
     const destination = interaction.options.getString('destination') || 'channel';
-    const listChannel = interaction.options.getChannel('list_channel');
 
     try {
         // Get current rewards
@@ -348,7 +321,7 @@ async function handleLevelRewardsSetup(interaction, guildId) {
                     .setColor('#00ff00')
                     .setTitle('Level Reward Added')
                     .setDescription(`Role ${role} will now be awarded at Level ${level}`)
-                    .setFooter({ text: 'Server Settings • Use /syssetup levelrewards list to see all rewards' })
+                    .setFooter({ text: 'Server Settings • Use /syssetup feature:levelrewards action:list to see all rewards' })
                     .setTimestamp();
 
                 await interaction.reply({ embeds: [addEmbed] });
@@ -381,7 +354,7 @@ async function handleLevelRewardsSetup(interaction, guildId) {
                         .setTitle(`Multiple Rewards for Level ${level}`)
                         .setDescription('Please specify which reward to remove using the reward_id parameter:')
                         .addFields({ name: 'Available Rewards', value: rewardsList })
-                        .setFooter({ text: 'Use /syssetup levelrewards remove level:X reward_id:Y' })
+                        .setFooter({ text: 'Use /syssetup feature:levelrewards action:remove level:X reward_id:Y' })
                         .setTimestamp();
 
                     return await interaction.reply({ embeds: [listEmbed], ephemeral: true });
@@ -463,7 +436,7 @@ async function handleLevelRewardsSetup(interaction, guildId) {
                     .setTitle('Level Rewards')
                     .setDescription('These roles will be awarded when users reach the specified levels:')
                     .addFields({ name: 'Rewards', value: rewardText })
-                    .setFooter({ text: 'Server Settings • Use /syssetup levelrewards to manage these rewards' })
+                    .setFooter({ text: 'Server Settings • Use /syssetup feature:levelrewards to manage these rewards' })
                     .setTimestamp();
 
                 // Send the list to the appropriate destination
@@ -482,24 +455,7 @@ async function handleLevelRewardsSetup(interaction, guildId) {
                         });
                     }
                 } else {
-                    // Send to specified channel or current channel
-                    if (listChannel) {
-                        try {
-                            await listChannel.send({ embeds: [listEmbed] });
-                            await interaction.reply({
-                                content: `Level rewards list has been sent to ${listChannel}.`,
-                                ephemeral: true
-                            });
-                        } catch (error) {
-                            console.error('Error sending to channel:', error);
-                            await interaction.reply({
-                                content: `Unable to send message to ${listChannel}. Please check bot permissions and try again.`,
-                                ephemeral: true
-                            });
-                        }
-                    } else {
-                        await interaction.reply({ embeds: [listEmbed] });
-                    }
+                    await interaction.reply({ embeds: [listEmbed] });
                 }
                 break;
 
@@ -522,6 +478,13 @@ async function handleLevelRewardsSetup(interaction, guildId) {
 async function handleUserCommandsSetup(interaction, guildId) {
     const mode = interaction.options.getString('mode');
     const channel = interaction.options.getChannel('channel');
+
+    if (!mode) {
+        return await interaction.reply({
+            content: 'Please provide a mode (enable or disable).',
+            ephemeral: true
+        });
+    }
 
     try {
         if (mode === 'enable' && !channel) {
@@ -562,6 +525,13 @@ async function handleUserCommandsSetup(interaction, guildId) {
 async function handleXPChannelsSetup(interaction, guildId) {
     const mode = interaction.options.getString('mode');
     const channelsInput = interaction.options.getString('channels');
+
+    if (!mode) {
+        return await interaction.reply({
+            content: 'Please provide a mode (whitelist, blacklist, or disable).',
+            ephemeral: true
+        });
+    }
 
     try {
         // Update mode setting
