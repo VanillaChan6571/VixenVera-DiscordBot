@@ -1,4 +1,4 @@
-// UGC reporting functionality with form-based approach
+// UGC reporting functionality with hybrid dropdown+modal approach
 const {
     EmbedBuilder,
     ApplicationCommandOptionType,
@@ -78,181 +78,293 @@ async function handleReportRequest(interaction) {
             });
         }
 
-        // Create the report form modal
-        const modal = new ModalBuilder()
-            .setCustomId(`ugc_report_${reportedUser.id}`)
-            .setTitle(`Report ${reportedUser.username}'s Content`);
+        // Step 1: Ask what content type they're reporting with a dropdown
+        const contentTypeRow = new ActionRowBuilder()
+            .addComponents(
+                new StringSelectMenuBuilder()
+                    .setCustomId(`report_content_type_${reportedUser.id}`)
+                    .setPlaceholder('Select content type')
+                    .addOptions([
+                        {
+                            label: 'Banner',
+                            description: 'Report the user\'s banner image',
+                            value: 'banner',
+                        },
+                        {
+                            label: 'Avatar',
+                            description: 'Report the user\'s profile picture',
+                            value: 'avatar',
+                        },
+                    ]),
+            );
 
-        // Content type selection
-        const contentTypeInput = new TextInputBuilder()
-            .setCustomId('content_type')
-            .setLabel('What content are you reporting?')
-            .setPlaceholder('1 for Banner, 2 for Avatar')
-            .setStyle(TextInputStyle.Short)
-            .setMinLength(1)
-            .setMaxLength(1)
-            .setRequired(true);
+        await interaction.reply({
+            content: `What content of ${reportedUser} are you reporting?`,
+            components: [contentTypeRow],
+            ephemeral: true
+        });
 
-        // Violation type selection
-        const violationTypeInput = new TextInputBuilder()
-            .setCustomId('violation_type')
-            .setLabel('Violation type (1-8, see below)')
-            .setPlaceholder('1:Sexual, 2:Child Exploitation, 3:Violence, 4:Hate, 5:Bullying, 6:Spam, 7:Graphic, 8:Stolen')
-            .setStyle(TextInputStyle.Short)
-            .setMinLength(1)
-            .setMaxLength(1)
-            .setRequired(true);
+        // Create a collector for the content type selection
+        const contentTypeFilter = i =>
+            i.customId === `report_content_type_${reportedUser.id}` &&
+            i.user.id === interaction.user.id;
 
-        // Source link (for copyright claims)
-        const sourceLinkInput = new TextInputBuilder()
-            .setCustomId('source_link')
-            .setLabel('Source link (only for stolen work/option 8)')
-            .setPlaceholder('Leave blank if not reporting stolen content')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(false);
+        const contentTypeCollector = interaction.channel.createMessageComponentCollector({
+            filter: contentTypeFilter,
+            time: 60000,
+            max: 1
+        });
 
-        // Confirmation for serious reports
-        const confirmationInput = new TextInputBuilder()
-            .setCustomId('confirmation')
-            .setLabel('For option 2 ONLY: Type 1 or 2 to confirm')
-            .setPlaceholder('1:I don\'t read but agree, 2:I read and agree. Leave blank if not option 2.')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(false);
+        contentTypeCollector.on('collect', async contentTypeInteraction => {
+            // Get the selected content type
+            const contentType = contentTypeInteraction.values[0];
 
-        // Additional details
-        const detailsInput = new TextInputBuilder()
-            .setCustomId('details')
-            .setLabel('Extra Details')
-            .setPlaceholder('Provide any additional information for the admins')
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(false);
+            // Step 2: Now ask about violation type with a dropdown
+            const violationTypeRow = new ActionRowBuilder()
+                .addComponents(
+                    new StringSelectMenuBuilder()
+                        .setCustomId(`report_violation_type_${reportedUser.id}`)
+                        .setPlaceholder('Select violation type')
+                        .addOptions([
+                            {
+                                label: '1. Sexual Content',
+                                description: 'Inappropriate sexual content',
+                                value: 'sexual',
+                            },
+                            {
+                                label: '2. Child Exploitation',
+                                description: 'Content that exploits or endangers children',
+                                value: 'child_exploitation',
+                            },
+                            {
+                                label: '3. Violence/Gore',
+                                description: 'Violent or gory content',
+                                value: 'violence',
+                            },
+                            {
+                                label: '4. Hate Speech',
+                                description: 'Hateful content targeting protected groups',
+                                value: 'hate',
+                            },
+                            {
+                                label: '5. Bullying',
+                                description: 'Content that bullies other users',
+                                value: 'bullying',
+                            },
+                            {
+                                label: '6. Advertising/Spam',
+                                description: 'Unsolicited advertising or spam',
+                                value: 'spam',
+                            },
+                            {
+                                label: '7. Graphic Content',
+                                description: 'Disturbing or graphic images',
+                                value: 'graphic',
+                            },
+                            {
+                                label: '8. Stolen/Copyright',
+                                description: 'Content that violates copyright or is stolen',
+                                value: 'copyright',
+                            },
+                        ]),
+                );
 
-        // Add inputs to the modal
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(contentTypeInput),
-            new ActionRowBuilder().addComponents(violationTypeInput),
-            new ActionRowBuilder().addComponents(sourceLinkInput),
-            new ActionRowBuilder().addComponents(confirmationInput),
-            new ActionRowBuilder().addComponents(detailsInput)
-        );
+            await contentTypeInteraction.update({
+                content: `Reporting ${contentType} of ${reportedUser}\nWhat type of violation are you reporting?`,
+                components: [violationTypeRow]
+            });
 
-        // Show the modal
-        await interaction.showModal(modal);
+            // Create a collector for the violation type selection
+            const violationTypeFilter = i =>
+                i.customId === `report_violation_type_${reportedUser.id}` &&
+                i.user.id === interaction.user.id;
 
-        // Wait for modal submission
-        const filter = i => i.customId === `ugc_report_${reportedUser.id}` && i.user.id === interaction.user.id;
+            const violationTypeCollector = interaction.channel.createMessageComponentCollector({
+                filter: violationTypeFilter,
+                time: 60000,
+                max: 1
+            });
 
-        try {
-            const submission = await interaction.awaitModalSubmit({ filter, time: 300000 }); // 5 minute timeout
+            violationTypeCollector.on('collect', async violationTypeInteraction => {
+                // Get the selected violation type
+                const violationType = violationTypeInteraction.values[0];
 
-            if (submission) {
-                // Get form values
-                const contentType = submission.fields.getTextInputValue('content_type');
-                const violationType = submission.fields.getTextInputValue('violation_type');
-                const sourceLink = submission.fields.getTextInputValue('source_link') || 'Not provided';
-                const confirmation = submission.fields.getTextInputValue('confirmation') || 'Not provided';
-                const details = submission.fields.getTextInputValue('details') || 'No additional details provided';
+                // Step 3: Create a custom modal based on violation type
+                const modal = new ModalBuilder()
+                    .setCustomId(`ugc_report_modal_${reportedUser.id}`)
+                    .setTitle(`Report ${reportedUser.username}'s ${contentType}`);
 
-                // Map content type to text
-                const contentTypeText = {
-                    '1': 'Banner',
-                    '2': 'Avatar'
-                }[contentType] || 'Unknown';
+                // Add fields based on violation type
+                const fields = [];
 
-                // Map violation type to text
-                const violationTypeText = {
-                    '1': 'Sexual Content',
-                    '2': 'Child Exploitation & Endangerment',
-                    '3': 'Violence and/or Gore',
-                    '4': 'Hate Speech',
-                    '5': 'Bullying',
-                    '6': 'Self Advertising/Ad/Spam',
-                    '7': 'Unwanted Graphic Content',
-                    '8': 'Stolen Work/Trademark/Copyright Issue'
-                }[violationType] || 'Unknown';
+                // Every report gets a details field
+                const detailsInput = new TextInputBuilder()
+                    .setCustomId('details')
+                    .setLabel('Additional Details')
+                    .setPlaceholder('Provide any additional information for the admins')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(false);
 
-                // Create the report embed
-                const reportEmbed = new EmbedBuilder()
-                    .setColor(violationType === '2' ? '#FF0000' : '#ff9900') // Red for serious reports, orange for others
-                    .setTitle(`Content Report - ${violationTypeText}`)
-                    .addFields(
-                        { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
-                        { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
-                        { name: 'Content Type', value: contentTypeText },
-                        { name: 'Violation Type', value: violationTypeText }
-                    )
-                    .setFooter({ text: `Submitted: ${new Date().toISOString()}` });
+                fields.push(new ActionRowBuilder().addComponents(detailsInput));
 
-                // Add source link field if it's a copyright claim
-                if (violationType === '8' && sourceLink !== 'Not provided') {
-                    reportEmbed.addFields({ name: 'Source Link', value: sourceLink });
+                // Add specific fields based on violation type
+                if (violationType === 'copyright') {
+                    // Add source link field for copyright claims
+                    const sourceLinkInput = new TextInputBuilder()
+                        .setCustomId('source_link')
+                        .setLabel('Source Link')
+                        .setPlaceholder('Provide a link to the original content')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true);
+
+                    fields.unshift(new ActionRowBuilder().addComponents(sourceLinkInput));
+                }
+                else if (violationType === 'child_exploitation') {
+                    // Add confirmation field for serious reports
+                    const confirmationInput = new TextInputBuilder()
+                        .setCustomId('confirmation')
+                        .setLabel('Important: Please Read')
+                        .setValue('I understand this is a serious accusation and confirm my report is truthful.')
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true);
+
+                    fields.unshift(new ActionRowBuilder().addComponents(confirmationInput));
                 }
 
-                // Add confirmation field if it's a serious report
-                if (violationType === '2') {
-                    const confirmationText = {
-                        '1': 'User did not read but agreed anyway',
-                        '2': 'User read and agreed'
-                    }[confirmation] || 'No confirmation provided';
+                // Add all fields to the modal
+                modal.addComponents(...fields);
 
-                    reportEmbed.addFields({ name: 'User Confirmation', value: confirmationText });
-                }
+                // Show the modal
+                await violationTypeInteraction.showModal(modal);
 
-                // Add details field
-                reportEmbed.addFields({ name: 'Additional Details', value: details });
+                // Wait for modal submission
+                const modalFilter = i =>
+                    i.customId === `ugc_report_modal_${reportedUser.id}` &&
+                    i.user.id === interaction.user.id;
 
-                // Send the report to the designated channel
-                await reportChannel.send({ embeds: [reportEmbed] });
+                try {
+                    const modalSubmission = await violationTypeInteraction.awaitModalSubmit({
+                        filter: modalFilter,
+                        time: 300000 // 5 minutes
+                    });
 
-                // Special handling for child exploitation reports
-                if (violationType === '2') {
-                    try {
-                        // Get the owner's ID from config or settings
-                        const ownerId = config.bot.ownerId || db.getGuildSetting(guildId, 'owner_id', null);
+                    // Process the form submission
+                    if (modalSubmission) {
+                        // Get the details
+                        const details = modalSubmission.fields.getTextInputValue('details') || 'No additional details provided';
 
-                        if (ownerId) {
-                            const owner = await interaction.client.users.fetch(ownerId);
+                        // Get content type and violation type display text
+                        const contentTypeText = contentType === 'banner' ? 'Banner' : 'Avatar';
+                        const violationTypeText = {
+                            'sexual': 'Sexual Content',
+                            'child_exploitation': 'Child Exploitation & Endangerment',
+                            'violence': 'Violence and/or Gore',
+                            'hate': 'Hate Speech',
+                            'bullying': 'Bullying',
+                            'spam': 'Self Advertising/Ad/Spam',
+                            'graphic': 'Unwanted Graphic Content',
+                            'copyright': 'Stolen Work/Trademark/Copyright Issue'
+                        }[violationType] || 'Unknown';
 
-                            if (owner) {
-                                // Create escalation embed
-                                const escalationEmbed = new EmbedBuilder()
-                                    .setColor('#FF0000')
-                                    .setTitle('⚠️ URGENT: Child Exploitation Report ⚠️')
-                                    .setDescription('A user has reported content that may contain child exploitation material. This requires immediate attention.')
-                                    .addFields(
-                                        { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
-                                        { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
-                                        { name: 'Content Type', value: contentTypeText },
-                                        { name: 'Additional Details', value: details },
-                                        { name: 'Server', value: interaction.guild.name },
-                                        { name: 'Required Actions', value: 'Please investigate immediately. If confirmed, report to Discord Trust & Safety and consider contacting authorities.' }
-                                    )
-                                    .setFooter({ text: `Escalated: ${new Date().toISOString()}` });
+                        // Create the report embed
+                        const reportEmbed = new EmbedBuilder()
+                            .setColor(violationType === 'child_exploitation' ? '#FF0000' : '#ff9900') // Red for serious reports
+                            .setTitle(`Content Report - ${violationTypeText}`)
+                            .addFields(
+                                { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
+                                { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
+                                { name: 'Content Type', value: contentTypeText },
+                                { name: 'Violation Type', value: violationTypeText }
+                            )
+                            .setFooter({ text: `Submitted: ${new Date().toISOString()}` });
 
-                                // Send DM to owner
-                                await owner.send({ embeds: [escalationEmbed] });
+                        // Add source link field if it's a copyright claim
+                        if (violationType === 'copyright') {
+                            const sourceLink = modalSubmission.fields.getTextInputValue('source_link');
+                            reportEmbed.addFields({ name: 'Source Link', value: sourceLink });
+                        }
 
-                                console.log(`Escalated child exploitation report to owner: ${ownerId}`);
+                        // Add confirmation field if it's a serious report
+                        if (violationType === 'child_exploitation') {
+                            const confirmation = modalSubmission.fields.getTextInputValue('confirmation');
+                            reportEmbed.addFields({ name: 'User Confirmation', value: confirmation });
+                        }
+
+                        // Add details field
+                        reportEmbed.addFields({ name: 'Additional Details', value: details });
+
+                        // Send the report to the designated channel
+                        await reportChannel.send({ embeds: [reportEmbed] });
+
+                        // Special handling for child exploitation reports
+                        if (violationType === 'child_exploitation') {
+                            try {
+                                // Get the owner's ID
+                                const ownerId = interaction.client.config?.bot?.ownerId || '233055065588367370'; // Fallback to config value
+
+                                if (ownerId) {
+                                    const owner = await interaction.client.users.fetch(ownerId).catch(() => null);
+
+                                    if (owner) {
+                                        // Create escalation embed
+                                        const escalationEmbed = new EmbedBuilder()
+                                            .setColor('#FF0000')
+                                            .setTitle('⚠️ URGENT: Child Exploitation Report ⚠️')
+                                            .setDescription('A user has reported content that may contain child exploitation material. This requires immediate attention.')
+                                            .addFields(
+                                                { name: 'Reported User', value: `${reportedUser} (ID: ${reportedUser.id})` },
+                                                { name: 'Reported By', value: `${interaction.user} (ID: ${interaction.user.id})` },
+                                                { name: 'Content Type', value: contentTypeText },
+                                                { name: 'Additional Details', value: details },
+                                                { name: 'Server', value: interaction.guild.name },
+                                                { name: 'Required Actions', value: 'Please investigate immediately. If confirmed, report to Discord Trust & Safety and consider contacting authorities.' }
+                                            )
+                                            .setFooter({ text: `Escalated: ${new Date().toISOString()}` });
+
+                                        // Send DM to owner
+                                        await owner.send({ embeds: [escalationEmbed] });
+
+                                        console.log(`Escalated child exploitation report to owner: ${ownerId}`);
+                                    }
+                                }
+                            } catch (error) {
+                                console.error('Failed to escalate serious report to owner:', error);
                             }
                         }
-                    } catch (error) {
-                        console.error('Failed to escalate serious report to owner:', error);
+
+                        // Confirm submission to the user
+                        await modalSubmission.reply({
+                            content: 'Your report has been submitted. Thank you for helping maintain community standards.',
+                            ephemeral: true
+                        });
+                    }
+                } catch (error) {
+                    if (error.code === 'InteractionCollectorError') {
+                        console.log('Modal timed out');
+                    } else {
+                        console.error('Error processing modal submission:', error);
                     }
                 }
+            });
 
-                // Confirm submission to the user
-                await submission.reply({
-                    content: 'Your report has been submitted. Thank you for helping maintain community standards.',
+            violationTypeCollector.on('end', collected => {
+                if (collected.size === 0) {
+                    contentTypeInteraction.followUp({
+                        content: 'Report cancelled due to timeout.',
+                        ephemeral: true
+                    });
+                }
+            });
+        });
+
+        contentTypeCollector.on('end', collected => {
+            if (collected.size === 0) {
+                interaction.followUp({
+                    content: 'Report cancelled due to timeout.',
                     ephemeral: true
                 });
             }
-        } catch (error) {
-            if (error.code === 'InteractionCollectorError') {
-                console.log('Modal timed out');
-            } else {
-                console.error('Error processing modal submission:', error);
-            }
-        }
+        });
     } catch (error) {
         console.error('Error handling report request:', error);
         await interaction.reply({
