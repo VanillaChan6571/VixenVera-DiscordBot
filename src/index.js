@@ -98,10 +98,22 @@ async function registerCommands() {
         console.log('Started refreshing application (/) commands.');
 
         // Combine regular and admin command definitions
-        const allCommands = [
+        let allCommands = [
             ...commandDefinitions,
             ...(adminCommandDefinitions || [])
         ];
+
+        // Process the commands to handle BigInt permissions
+        allCommands = allCommands.map(cmd => {
+            const command = { ...cmd };
+
+            // Convert BigInt permissions to strings if they exist
+            if (command.defaultMemberPermissions) {
+                command.defaultMemberPermissions = command.defaultMemberPermissions.toString();
+            }
+
+            return command;
+        });
 
         console.log('Registering commands:', allCommands.map(cmd => cmd.name).join(', '));
 
