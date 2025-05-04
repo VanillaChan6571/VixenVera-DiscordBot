@@ -23,14 +23,19 @@ const commandDefinitions = [
                 ]
             },
             {
+                name: 'enabled',
+                description: 'Whether to enable or disable the feature',
+                type: ApplicationCommandOptionType.Boolean,
+                required: false
+            },
+            {
                 name: 'mode',
-                description: 'How the feature should work',
+                description: 'Advanced mode setting (overrides enabled/disabled)',
                 type: ApplicationCommandOptionType.String,
-                required: true,
+                required: false,
                 choices: [
                     { name: 'Allow User Content', value: 'allow_user' },
-                    { name: 'Server-Only Content', value: 'server_only' },
-                    { name: 'Disabled', value: 'disabled' }
+                    { name: 'Server-Only Content', value: 'server_only' }
                 ]
             }
         ]
@@ -146,55 +151,65 @@ const commandHandlers = {
         }
 
         const feature = interaction.options.getString('feature');
+        const enabled = interaction.options.getBoolean('enabled');
         const mode = interaction.options.getString('mode');
         const guildId = interaction.guild.id;
 
         try {
-            // Set appropriate database values based on mode
-            if (mode === 'allow_user') {
-                // Enable user content, disable server-only mode
-                await db.updateGuildSetting(guildId, `allow_user_${feature}`, true);
-                await db.updateGuildSetting(guildId, `guild_only_${feature}`, false);
+            // If mode is provided, it takes precedence over enabled
+            if (mode) {
+                if (mode === 'allow_user') {
+                    // Enable user content, disable server-only mode
+                    await db.updateGuildSetting(guildId, `allow_user_${feature}`, true);
+                    await db.updateGuildSetting(guildId, `guild_only_${feature}`, false);
+
+                    // Create response embed
+                    const embed = new EmbedBuilder()
+                        .setColor('#00ff00')
+                        .setTitle('Feature Setting Updated')
+                        .setDescription(`User-generated ${feature} content is now enabled on this server.`)
+                        .setFooter({text: 'Server Settings'})
+                        .setTimestamp();
+
+                    await interaction.reply({embeds: [embed]});
+                }
+                else if (mode === 'server_only') {
+                    // Enable server-only mode, but keep user content enabled for backward compatibility
+                    await db.updateGuildSetting(guildId, `guild_only_${feature}`, true);
+                    await db.updateGuildSetting(guildId, `allow_user_${feature}`, true);
+
+                    // Create response embed
+                    const embed = new EmbedBuilder()
+                        .setColor('#ff9900')
+                        .setTitle('Server-Only Setting Updated')
+                        .setDescription(`${feature.charAt(0).toUpperCase() + feature.slice(1)} is now set to only use server-defined content.`)
+                        .setFooter({text: 'Server Settings'})
+                        .setTimestamp();
+
+                    await interaction.reply({embeds: [embed]});
+                }
+            }
+            // If only enabled/disabled is provided (original behavior)
+            else if (enabled !== null) {
+                // Update the setting in the database
+                const result = await db.updateGuildSetting(guildId, `allow_user_${feature}`, enabled);
 
                 // Create response embed
                 const embed = new EmbedBuilder()
-                    .setColor('#00ff00')
+                    .setColor(enabled ? '#00ff00' : '#ff0000')
                     .setTitle('Feature Setting Updated')
-                    .setDescription(`User-generated ${feature} content is now enabled on this server.`)
+                    .setDescription(`User-generated ${feature} content is now ${enabled ? 'enabled' : 'disabled'} on this server.`)
                     .setFooter({text: 'Server Settings'})
                     .setTimestamp();
 
                 await interaction.reply({embeds: [embed]});
             }
-            else if (mode === 'server_only') {
-                // Enable server-only mode, but keep user content enabled for backward compatibility
-                await db.updateGuildSetting(guildId, `guild_only_${feature}`, true);
-                await db.updateGuildSetting(guildId, `allow_user_${feature}`, true);
-
-                // Create response embed
-                const embed = new EmbedBuilder()
-                    .setColor('#ff9900')
-                    .setTitle('Server-Only Setting Updated')
-                    .setDescription(`${feature.charAt(0).toUpperCase() + feature.slice(1)} is now set to only use server-defined content.`)
-                    .setFooter({text: 'Server Settings'})
-                    .setTimestamp();
-
-                await interaction.reply({embeds: [embed]});
-            }
-            else if (mode === 'disabled') {
-                // Disable user content entirely
-                await db.updateGuildSetting(guildId, `allow_user_${feature}`, false);
-                // Server-only setting doesn't matter when content is disabled
-
-                // Create response embed
-                const embed = new EmbedBuilder()
-                    .setColor('#ff0000')
-                    .setTitle('Feature Setting Updated')
-                    .setDescription(`User-generated ${feature} content is now disabled on this server.`)
-                    .setFooter({text: 'Server Settings'})
-                    .setTimestamp();
-
-                await interaction.reply({embeds: [embed]});
+            // No parameters provided
+            else {
+                return await interaction.reply({
+                    content: 'Please provide either the `enabled` parameter or the `mode` parameter.',
+                    ephemeral: true
+                });
             }
         } catch (error) {
             console.error('Error in systoggle command:', error);
