@@ -35,6 +35,11 @@ const commandDefinitions = [
         ]
     },
     {
+        name: 'level-sacrifice',
+        description: 'The fox will make know... you will understand later...',
+        options: []
+    },
+    {
         name: 'leaderboard',
         description: 'Show the server\'s leveling leaderboard',
         options: [
@@ -189,6 +194,81 @@ const commandHandlers = {
                     ephemeral: true
                 });
             }
+        }
+    },
+
+    async 'level-sacrifice'(interaction) {
+        if (!db) {
+            return await interaction.reply({
+                content: 'Database is not initialized. Please try again later.',
+                ephemeral: true
+            });
+        }
+
+        const userId = interaction.user.id;
+        const guildId = interaction.guild.id;
+
+        try {
+            // Attempt to sacrifice
+            const result = await db.sacrificeUser(userId, guildId);
+
+            if (result.success) {
+                // Successful sacrifice
+                const embed = new EmbedBuilder()
+                    .setColor('#FF4500')
+                    .setTitle('🦊 Sacrifice Completed')
+                    .setDescription(result.message)
+                    .addFields(
+                        { name: 'Sacrifice Count', value: `${result.sacrificeCount}`, inline: true },
+                        { name: 'New Level', value: '1', inline: true }
+                    )
+                    .setFooter({ text: 'The path begins anew...' })
+                    .setTimestamp();
+
+                // If there's a sacrifice role, add it to the user
+                if (config.xp.sacrifice.enabled && config.xp.sacrifice.sacrificeRoleId) {
+                    try {
+                        const role = interaction.guild.roles.cache.get(config.xp.sacrifice.sacrificeRoleId);
+                        if (role) {
+                            await interaction.member.roles.add(role);
+                            embed.addFields({ name: 'Reward', value: `You've been granted the ${role.name} role!` });
+                        }
+                    } catch (roleError) {
+                        console.error('Error adding sacrifice role:', roleError);
+                    }
+                }
+
+                return await interaction.reply({
+                    content: `<@${userId}>`,
+                    embeds: [embed]
+                });
+            } else {
+                // Not successful - various reasons
+                if (result.needsConfirmation) {
+                    // User needs to confirm
+                    // Set a timeout to reset the pending flag after 2 minutes
+                    setTimeout(() => {
+                        db.resetSacrificePending(userId, guildId);
+                    }, 2 * 60 * 1000);
+
+                    return await interaction.reply({
+                        content: `<@${userId}> ${result.message}`,
+                        ephemeral: false
+                    });
+                } else {
+                    // User is not eligible
+                    return await interaction.reply({
+                        content: result.message,
+                        ephemeral: true
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error executing sacrifice command:', error);
+            return await interaction.reply({
+                content: 'There was an error processing your sacrifice. Please try again later.',
+                ephemeral: true
+            });
         }
     },
 
