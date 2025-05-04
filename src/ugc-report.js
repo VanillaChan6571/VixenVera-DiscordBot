@@ -56,7 +56,17 @@ async function handleReportRequest(interaction) {
 
         // Create a message collector to wait for the user's response
         const filter = m => m.author.id === interaction.user.id;
-        const responseChannel = await interaction.user.createDM().catch(() => interaction.channel);
+        const responseChannel = await interaction.user.createDM().catch(() => null);
+
+        if (!responseChannel) {
+            return await interaction.followUp({
+                content: 'I wasn\'t able to send you a DM. Please enable DMs from server members and try again.',
+                ephemeral: true
+            });
+        }
+
+        // Send initial prompt in DM
+        await responseChannel.send('Please mention or provide the ID of the user whose content you want to report:');
 
         const collector = responseChannel.createMessageCollector({ filter, time: 60000, max: 1 });
 
@@ -100,6 +110,12 @@ async function handleReportRequest(interaction) {
 
                 // Confirm to the user
                 await reasonMsg.reply('Your report has been submitted to the moderators. Thank you for helping keep the server appropriate!');
+
+                // Notify in the original channel too
+                await interaction.followUp({
+                    content: 'Your report has been submitted successfully.',
+                    ephemeral: true
+                });
             });
 
             reasonCollector.on('end', collected => {
