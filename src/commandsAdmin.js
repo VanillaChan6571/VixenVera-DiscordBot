@@ -9,12 +9,12 @@ let db;
 const commandDefinitions = [
     {
         name: 'systoggle',
-        description: 'Toggle user content features for this server',
+        description: 'Configure user content features for this server',
         defaultMemberPermissions: PermissionFlagsBits.ManageGuild,
         options: [
             {
                 name: 'feature',
-                description: 'The feature to toggle',
+                description: 'The feature to configure',
                 type: ApplicationCommandOptionType.String,
                 required: true,
                 choices: [
@@ -23,33 +23,15 @@ const commandDefinitions = [
                 ]
             },
             {
-                name: 'enabled',
-                description: 'Whether to enable or disable the feature',
-                type: ApplicationCommandOptionType.Boolean,
-                required: true
-            }
-        ]
-    },
-    {
-        name: 'sysguildonly',
-        description: 'Set a feature to only use server-defined content',
-        defaultMemberPermissions: PermissionFlagsBits.ManageGuild,
-        options: [
-            {
-                name: 'feature',
-                description: 'The feature to set to guild-only mode',
+                name: 'mode',
+                description: 'How the feature should work',
                 type: ApplicationCommandOptionType.String,
                 required: true,
                 choices: [
-                    { name: 'Banner', value: 'banner' },
-                    { name: 'Avatar', value: 'avatar' }
+                    { name: 'Allow User Content', value: 'allow_user' },
+                    { name: 'Server-Only Content', value: 'server_only' },
+                    { name: 'Disabled', value: 'disabled' }
                 ]
-            },
-            {
-                name: 'enabled',
-                description: 'Whether to enable or disable guild-only mode',
-                type: ApplicationCommandOptionType.Boolean,
-                required: true
             }
         ]
     },
@@ -146,7 +128,7 @@ function isOwner(interaction) {
 
 // Command handlers
 const commandHandlers = {
-    // systoggle command handler
+    // systoggle command handler with integrated guild-only functionality
     async systoggle(interaction) {
         if (!db) {
             return await interaction.reply({
@@ -164,22 +146,56 @@ const commandHandlers = {
         }
 
         const feature = interaction.options.getString('feature');
-        const enabled = interaction.options.getBoolean('enabled');
+        const mode = interaction.options.getString('mode');
         const guildId = interaction.guild.id;
 
         try {
-            // Update the setting in the database
-            const result = await db.updateGuildSetting(guildId, `allow_user_${feature}`, enabled);
+            // Set appropriate database values based on mode
+            if (mode === 'allow_user') {
+                // Enable user content, disable server-only mode
+                await db.updateGuildSetting(guildId, `allow_user_${feature}`, true);
+                await db.updateGuildSetting(guildId, `guild_only_${feature}`, false);
 
-            // Create response embed
-            const embed = new EmbedBuilder()
-                .setColor(enabled ? '#00ff00' : '#ff0000')
-                .setTitle('Feature Setting Updated')
-                .setDescription(`User-generated ${feature} content is now ${enabled ? 'enabled' : 'disabled'} on this server.`)
-                .setFooter({text: 'Server Settings'})
-                .setTimestamp();
+                // Create response embed
+                const embed = new EmbedBuilder()
+                    .setColor('#00ff00')
+                    .setTitle('Feature Setting Updated')
+                    .setDescription(`User-generated ${feature} content is now enabled on this server.`)
+                    .setFooter({text: 'Server Settings'})
+                    .setTimestamp();
 
-            await interaction.reply({embeds: [embed]});
+                await interaction.reply({embeds: [embed]});
+            }
+            else if (mode === 'server_only') {
+                // Enable server-only mode, but keep user content enabled for backward compatibility
+                await db.updateGuildSetting(guildId, `guild_only_${feature}`, true);
+                await db.updateGuildSetting(guildId, `allow_user_${feature}`, true);
+
+                // Create response embed
+                const embed = new EmbedBuilder()
+                    .setColor('#ff9900')
+                    .setTitle('Server-Only Setting Updated')
+                    .setDescription(`${feature.charAt(0).toUpperCase() + feature.slice(1)} is now set to only use server-defined content.`)
+                    .setFooter({text: 'Server Settings'})
+                    .setTimestamp();
+
+                await interaction.reply({embeds: [embed]});
+            }
+            else if (mode === 'disabled') {
+                // Disable user content entirely
+                await db.updateGuildSetting(guildId, `allow_user_${feature}`, false);
+                // Server-only setting doesn't matter when content is disabled
+
+                // Create response embed
+                const embed = new EmbedBuilder()
+                    .setColor('#ff0000')
+                    .setTitle('Feature Setting Updated')
+                    .setDescription(`User-generated ${feature} content is now disabled on this server.`)
+                    .setFooter({text: 'Server Settings'})
+                    .setTimestamp();
+
+                await interaction.reply({embeds: [embed]});
+            }
         } catch (error) {
             console.error('Error in systoggle command:', error);
             await interaction.reply({
@@ -189,52 +205,7 @@ const commandHandlers = {
         }
     },
 
-    // sysguildonly command handler
-    async sysguildonly(interaction) {
-        if (!db) {
-            return await interaction.reply({
-                content: 'Database is not initialized. Please try again later.',
-                ephemeral: true
-            });
-        }
-
-        // Check if user has permissions
-        if (!hasAdminPermissions(interaction)) {
-            return await interaction.reply({
-                content: 'You do not have permission to use this command.',
-                ephemeral: true
-            });
-        }
-
-        const feature = interaction.options.getString('feature');
-        const enabled = interaction.options.getBoolean('enabled');
-        const guildId = interaction.guild.id;
-
-        try {
-            // Update the setting in the database
-            const result = await db.updateGuildSetting(guildId, `guild_only_${feature}`, enabled);
-
-            // Create response embed
-            const embed = new EmbedBuilder()
-                .setColor(enabled ? '#00ff00' : '#ff0000')
-                .setTitle('Server-Only Setting Updated')
-                .setDescription(`${feature.charAt(0).toUpperCase() + feature.slice(1)} is now set to ${enabled ? 'only use server-defined content' : 'allow user content'}.`)
-                .setFooter({text: 'Server Settings'})
-                .setTimestamp();
-
-            await interaction.reply({embeds: [embed]});
-        } catch (error) {
-            console.error('Error in sysguildonly command:', error);
-            await interaction.reply({
-                content: 'There was an error updating the settings.',
-                ephemeral: true
-            });
-        }
-    },
-
-// Update the sysguild handler in src/commandsAdmin.js
-
-// sysguild command handler
+    // sysguild command handler
     async sysguild(interaction) {
         if (!db) {
             return await interaction.reply({
