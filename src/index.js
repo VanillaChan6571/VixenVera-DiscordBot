@@ -4,29 +4,30 @@ const {
     GatewayIntentBits,
     ActivityType,
     REST,
-    Routes
+    Routes,
+    EmbedBuilder
 } = require('discord.js');
 
 // Load modules
 const config = require('./config');
 const { LevelingDB, XPCooldownManager, generateXP } = require('./levelingSystem');
-const { definitions: commandDefinitions, handlers: commandHandlers } = require('./commands');
+const { definitions: commandDefinitions, handlers: commandHandlers, setDatabase } = require('./commands');
 
 // Validate critical configuration
 function validateConfig() {
     let hasErrors = false;
 
-    if (!config.bot.token) {
+    if (!config.bot || !config.bot.token) {
         console.error('ERROR: Bot token is missing! Make sure you have a valid .env file with BOT_TOKEN.');
         hasErrors = true;
     }
 
-    if (!config.bot.clientId) {
+    if (!config.bot || !config.bot.clientId) {
         console.error('ERROR: Client ID is missing! Make sure you have a valid .env file with CLIENT_ID.');
         hasErrors = true;
     }
 
-    if (!config.database.sqlite.path) {
+    if (!config.database || !config.database.sqlite || !config.database.sqlite.path) {
         console.error('ERROR: Database path is undefined! Check your configuration.');
         hasErrors = true;
     }
@@ -54,6 +55,8 @@ const client = new Client({
 let db;
 try {
     db = new LevelingDB();
+    // Pass database to command handlers
+    setDatabase(db);
     console.log('Database initialized successfully');
 } catch (error) {
     console.error('Failed to initialize database:', error);
@@ -66,6 +69,7 @@ const cooldownManager = new XPCooldownManager();
 async function registerCommands() {
     try {
         console.log('Started refreshing application (/) commands.');
+        console.log('Registering commands:', commandDefinitions.map(cmd => cmd.name).join(', '));
 
         const rest = new REST({ version: '10' }).setToken(config.bot.token);
 
@@ -141,7 +145,7 @@ client.on('messageCreate', async message => {
     try {
         // Give XP to user
         const xpToAdd = generateXP();
-        const result = db.addXP(userId, xpToAdd);
+        const result = db.addXP(userId, xpToAdd, message.guild.id);
 
         // Handle level up if it occurred
         if (result.leveledUp && config.xp.levelUp.enabled) {
@@ -166,7 +170,6 @@ client.on('messageCreate', async message => {
             }
 
             // Create level up message
-            const { EmbedBuilder } = require('discord.js');
             const levelUpEmbed = new EmbedBuilder()
                 .setColor('#00ff00')
                 .setTitle('Level Up!')
@@ -208,6 +211,24 @@ client.on('messageCreate', async message => {
             } else {
                 // Send in channel
                 channel.send({ embeds: [levelUpEmbed] });
+            }
+
+            // Check if user reached max level and is eligible for sacrifice
+            if (newLevel === config.xp.maxLevel) {
+                // Check if they have reached the maximum XP for the level
+                if (db.isEligibleForSacrificePrompt(userId, message.guild.id)) {
+                    // Send the fox invitation message
+                    const foxMessage = new EmbedBuilder()
+                        .setColor('#FF0000')
+                        .setTitle('🦊 The Fox Calls')
+                        .setDescription("The fox lurks beyond the shadows... accept its invitation by using the `/level-sacrifice` command")
+                        .setFooter({ text: 'A new beginning awaits...' });
+
+                    channel.send({
+                        content: `<@${userId}>`,
+                        embeds: [foxMessage]
+                    });
+                }
             }
         }
     } catch (error) {

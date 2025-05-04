@@ -1,269 +1,118 @@
-// Discord Leveling Bot - Main File
-const {
-    Client,
-    GatewayIntentBits,
-    ActivityType,
-    REST,
-    Routes,
-    EmbedBuilder
-} = require('discord.js');
+// Leveling Bot Configuration Options
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
+const path = require('path');
 
-// Load modules
-const config = require('./config');
-const { LevelingDB, XPCooldownManager, generateXP } = require('./levelingSystem');
-const { definitions: commandDefinitions, handlers: commandHandlers, setDatabase } = require('./commands');
+// For debugging
+console.log('Environment variables loaded:');
+console.log('BOT_TOKEN exists:', !!process.env.BOT_TOKEN);
+console.log('CLIENT_ID exists:', !!process.env.CLIENT_ID);
+console.log('DB_FILENAME:', process.env.DB_FILENAME);
 
-// Validate critical configuration
-function validateConfig() {
-    let hasErrors = false;
+module.exports = {
+    // Bot configuration
+    bot: {
+        token: process.env.BOT_TOKEN,
+        clientId: process.env.CLIENT_ID,
+        ownerId: "233055065588367370", // Set the owner ID here
+        activity: {
+            name: 'levels increasing',
+            type: 'Watching' // Playing, Streaming, Listening, Watching, Competing
+        }
+    },
 
-    if (!config.bot.token) {
-        console.error('ERROR: Bot token is missing! Make sure you have a valid .env file with BOT_TOKEN.');
-        hasErrors = true;
-    }
+    // Database configuration
+    database: {
+        // Database type: 'sqlite'
+        type: 'sqlite',
 
-    if (!config.bot.clientId) {
-        console.error('ERROR: Client ID is missing! Make sure you have a valid .env file with CLIENT_ID.');
-        hasErrors = true;
-    }
+        // SQLite configuration
+        sqlite: {
+            filename: process.env.DB_FILENAME || 'leveling.db',
+            // Store in data directory at project root
+            path: path.resolve(__dirname, '../data', process.env.DB_FILENAME || 'leveling.db'),
 
-    if (!config.database.sqlite.path) {
-        console.error('ERROR: Database path is undefined! Check your configuration.');
-        hasErrors = true;
-    }
+            // How often to commit changes to disk (ms)
+            saveInterval: 10000, // 10 seconds
 
-    return !hasErrors;
-}
-
-// Abort if configuration is invalid
-if (!validateConfig()) {
-    console.error('Critical configuration errors found. Aborting.');
-    process.exit(1);
-}
-
-// Initialize client with required intents
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
-    ]
-});
-
-// Initialize database and cooldown manager
-let db;
-try {
-    db = new LevelingDB();
-    // Pass database to command handlers
-    setDatabase(db);
-    console.log('Database initialized successfully');
-} catch (error) {
-    console.error('Failed to initialize database:', error);
-    process.exit(1);
-}
-
-const cooldownManager = new XPCooldownManager();
-
-// Function to register slash commands
-async function registerCommands() {
-    try {
-        console.log('Started refreshing application (/) commands.');
-        console.log('Registering commands:', commandDefinitions.map(cmd => cmd.name).join(', '));
-
-        const rest = new REST({ version: '10' }).setToken(config.bot.token);
-
-        await rest.put(
-            Routes.applicationCommands(config.bot.clientId),
-            { body: commandDefinitions }
-        );
-
-        console.log('Successfully reloaded application (/) commands.');
-    } catch (error) {
-        console.error('Error registering commands:', error);
-    }
-}
-
-// When bot is ready
-client.once('ready', () => {
-    console.log(`Logged in as ${client.user.tag}!`);
-
-    // Register slash commands
-    registerCommands();
-
-    // Set bot activity
-    const activityType = ActivityType[config.bot.activity.type] || ActivityType.Watching;
-    client.user.setActivity(config.bot.activity.name, { type: activityType });
-
-    console.log('Leveling bot is now online!');
-});
-
-// Handle slash commands
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
-
-    const { commandName } = interaction;
-
-    // Find handler for this command
-    const handler = commandHandlers[commandName];
-
-    if (handler) {
-        try {
-            await handler(interaction);
-        } catch (error) {
-            console.error(`Error executing command ${commandName}:`, error);
-
-            // Reply with error message if interaction hasn't been replied to
-            const replyContent = {
-                content: 'There was an error executing this command!',
-                ephemeral: true
-            };
-
-            if (interaction.deferred) {
-                await interaction.editReply(replyContent);
-            } else if (!interaction.replied) {
-                await interaction.reply(replyContent);
+            // Pragmas for performance tuning
+            pragmas: {
+                // Performance optimizations
+                'journal_mode': 'WAL',       // Write-ahead logging for better concurrency
+                'synchronous': 'NORMAL',     // Sync less often for better performance
+                'cache_size': -64000,        // 64MB cache (negative means KB)
+                'foreign_keys': 'ON',        // Enforce foreign key constraints
+                'temp_store': 'MEMORY'       // Store temp tables in memory
             }
         }
-    }
-});
+    },
 
-// Process messages for XP
-client.on('messageCreate', async message => {
-    // Ignore bot messages and DMs
-    if (message.author.bot || !message.guild) return;
+    // XP system configuration
+    xp: {
+        cooldown: 60000, // Cooldown in milliseconds between XP rewards (default: 1 minute)
+        min: 15,         // Minimum XP per message
+        max: 25,         // Maximum XP per message
+        baseXP: 100,     // Base XP required for level 1 (used for formula fallback)
 
-    // Get user ID
-    const userId = message.author.id;
+        // The formula for calculating XP needed for a level is:
+        // baseXP * level^curve
+        // Higher curve = exponentially more difficult higher levels
+        curve: 1.5,
 
-    // Check if user is on cooldown
-    if (cooldownManager.isOnCooldown(userId)) return;
+        // Maximum level - users can't go beyond this
+        maxLevel: 100,
 
-    // Set new cooldown
-    cooldownManager.setCooldown(userId);
+        // CUSTOM XP REQUIREMENTS
+        // Set custom XP thresholds for specific levels
+        // Format: { level: required_total_xp }
+        customLevelThresholds: {
+            1: 5,          // Level 1 requires 5 XP
+            10: 1000,      // Level 10 requires 1,000 XP
+            20: 5000,      // Level 20 requires 5,000 XP
+            50: 10000,     // Level 50 requires 10,000 XP
+            100: 30000,    // Level 100 requires 30,000 XP
+        },
 
-    try {
-        // Give XP to user
-        const xpToAdd = generateXP();
-        const result = db.addXP(userId, xpToAdd, message.guild.id);
+        // Whether to use custom thresholds or formula
+        useCustomThresholds: true,
 
-        // Handle level up if it occurred
-        if (result.leveledUp && config.xp.levelUp.enabled) {
-            // Check if level rewards are enabled
-            const newLevel = result.newLevel;
-            let roleAwarded = null;
+        // Whether to interpolate XP for levels not explicitly defined
+        // If true, levels between defined thresholds will be calculated with linear interpolation
+        // If false, levels not defined will use the formula
+        interpolateXP: true,
 
-            // Check if there's a role reward for this level
-            if (config.xp.levelUp.rewards[newLevel]) {
-                const roleId = config.xp.levelUp.rewards[newLevel];
-                const role = message.guild.roles.cache.get(roleId);
+        // Sacrifice system
+        sacrifice: {
+            enabled: true,
+            // Role ID given to users who have sacrificed (leave empty if none)
+            sacrificeRoleId: "",  // Add a role ID if you want to give a special role
+            // The number of times a user has sacrificed is tracked in the database
+        },
 
-                // Give role if it exists
-                if (role) {
-                    try {
-                        await message.member.roles.add(role);
-                        roleAwarded = role;
-                    } catch (err) {
-                        console.error(`Failed to add role ${roleId} to user ${userId}:`, err);
-                    }
-                }
-            }
+        // Level up notification options
+        levelUp: {
+            enabled: true,          // Whether to send level up messages
+            channelOverride: null,  // Set to a channel ID to send level ups to a specific channel, or null for same channel
+            dm: false,              // Whether to send level up messages via DM instead of in the channel
+            pingUser: true,         // Whether to ping the user in level up messages
 
-            // Create level up message
-            const levelUpEmbed = new EmbedBuilder()
-                .setColor('#00ff00')
-                .setTitle('Level Up!')
-                .setDescription(
-                    `Congratulations ${config.xp.levelUp.pingUser ? message.author : message.author.username}! ` +
-                    `You've reached **Level ${newLevel}**!`
-                )
-                .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-                .setTimestamp();
-
-            // Add role info if a role was awarded
-            if (roleAwarded) {
-                levelUpEmbed.addFields({
-                    name: 'Reward Unlocked!',
-                    value: `You've been given the ${roleAwarded.name} role!`
-                });
-            }
-
-            // Determine where to send level up message
-            let channel = message.channel;
-
-            // Check for channel override
-            if (config.xp.levelUp.channelOverride) {
-                const overrideChannel = client.channels.cache.get(config.xp.levelUp.channelOverride);
-                if (overrideChannel) {
-                    channel = overrideChannel;
-                }
-            }
-
-            // Send as DM if configured
-            if (config.xp.levelUp.dm) {
-                try {
-                    await message.author.send({ embeds: [levelUpEmbed] });
-                } catch (err) {
-                    console.error(`Failed to send DM to user ${userId}:`, err);
-                    // Fall back to channel if DM fails
-                    channel.send({ embeds: [levelUpEmbed] });
-                }
-            } else {
-                // Send in channel
-                channel.send({ embeds: [levelUpEmbed] });
-            }
-
-            // Check if user reached max level and is eligible for sacrifice
-            if (newLevel === config.xp.maxLevel) {
-                // Check if they have reached the maximum XP for the level
-                if (db.isEligibleForSacrificePrompt(userId, message.guild.id)) {
-                    // Send the fox invitation message
-                    const foxMessage = new EmbedBuilder()
-                        .setColor('#FF0000')
-                        .setTitle('🦊 The Fox Calls')
-                        .setDescription("The fox lurks beyond the shadows... accept its invitation by using the `/level-sacrifice` command")
-                        .setFooter({ text: 'A new beginning awaits...' });
-
-                    channel.send({
-                        content: `<@${userId}>`,
-                        embeds: [foxMessage]
-                    });
-                }
+            // Custom level rewards (role IDs assigned at specific levels)
+            // Format: { level: "roleId" }
+            rewards: {
+                // Example: 5: "12345678901234567890", // Level 5 gets role ID 123456789...
             }
         }
-    } catch (error) {
-        console.error('Error in XP processing:', error);
+    },
+
+    // Leaderboard configuration
+    leaderboard: {
+        pageSize: 10,         // Number of users per leaderboard page
+        showGlobalRank: true, // Show user's global rank position in /level command
+    },
+
+    // Progress bar configuration
+    progressBar: {
+        length: 10,     // Length of the progress bar
+        filled: '█',    // Character for filled portion
+        empty: '░',     // Character for empty portion
     }
-});
-
-// Login the bot
-console.log('Attempting to log in to Discord...');
-client.login(config.bot.token).catch(error => {
-    console.error('Failed to login to Discord:', error);
-    process.exit(1);
-});
-
-// Proper shutdown handling
-function gracefulShutdown() {
-    console.log('Shutting down gracefully...');
-
-    if (db) {
-        db.close();
-    }
-
-    client.destroy();
-    process.exit(0);
-}
-
-// Register shutdown handlers
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
-
-// Error handling for client
-client.on('error', err => {
-    console.error('Discord client error:', err);
-});
-
-process.on('unhandledRejection', error => {
-    console.error('Unhandled promise rejection:', error);
-});
+};
