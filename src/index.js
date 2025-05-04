@@ -95,6 +95,18 @@ async function registerCommands() {
             ...(ugcCommandDefinitions || []) // Add UGC commands
         ];
 
+        // Process the commands to handle BigInt permissions
+        allCommands = allCommands.map(cmd => {
+            const command = { ...cmd };
+
+            // Convert BigInt permissions to strings if they exist
+            if (command.defaultMemberPermissions) {
+                command.defaultMemberPermissions = command.defaultMemberPermissions.toString();
+            }
+
+            return command;
+        });
+
         console.log('Registering commands:', allCommands.map(cmd => cmd.name).join(', '));
 
         const rest = new REST({ version: '10' }).setToken(config.bot.token);
