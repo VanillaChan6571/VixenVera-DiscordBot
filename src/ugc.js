@@ -6,10 +6,6 @@ const config = require('./config');
 const { isUserContentAllowed } = require('./levelingSystem');
 const sharp = require('sharp');
 
-// Helper functions for UGC path handling
-const path = require('path');
-const fs = require('fs');
-
 // Create a Map to store active upload sessions
 // Key: userId, Value: { type, guildId, timeout, isStaff }
 const activeSessions = new Map();
@@ -20,72 +16,26 @@ const contentDimensions = {
     avatar: { width: 512, height: 512 }
 };
 
-/**
- * Create directories for UGC storage if they don't exist
- * @returns {string} Base UGC directory path
- */
+// Create directories for UGC storage if they don't exist
 function ensureDirectoriesExist() {
-    // Root-level ugc directory based on the file structure you showed
+    // Use the root-level ugc directory
     const baseDir = path.resolve(__dirname, '../ugc');
     const types = ['avatars', 'banners'];
 
     if (!fs.existsSync(baseDir)) {
         fs.mkdirSync(baseDir, { recursive: true });
-        console.log(`Created UGC base directory: ${baseDir}`);
     }
 
     for (const type of types) {
         const typeDir = path.join(baseDir, type);
         if (!fs.existsSync(typeDir)) {
             fs.mkdirSync(typeDir, { recursive: true });
-            console.log(`Created UGC ${type} directory: ${typeDir}`);
         }
     }
 
     console.log('UGC directories initialized');
     return baseDir;
 }
-
-/**
- * Generate file path for uploaded content
- * @param {string} userId - User ID
- * @param {string} guildId - Guild ID
- * @param {string} type - Content type (avatar, banner)
- * @param {boolean} isStaff - Whether this is a staff upload
- * @returns {object} File information
- */
-function generateUGCPath(userId, guildId, type, isStaff = false) {
-    // Ensure the type has 's' at the end (avatars, banners)
-    const typePlural = type.endsWith('s') ? type : `${type}s`;
-
-    // Generate unique filename
-    const fileName = `${isStaff ? 'guild' : userId}_${guildId}_${Date.now()}.png`;
-
-    // Create paths
-    const ugcDir = path.resolve(__dirname, '../ugc', typePlural);
-    const filePath = path.join(ugcDir, fileName);
-
-    // URL path for accessing the file
-    const urlPath = `/ugc/${typePlural}/${fileName}`;
-
-    return {
-        fileName,
-        ugcDir,
-        filePath,
-        urlPath
-    };
-}
-
-// When creating file paths for uploads, change:
-const fileName = `${isStaff ? 'guild' : userId}_${guildId}_${Date.now()}.png`;
-const ugcDir = path.join(__dirname, '../ugc', `${type}s`);
-const filePath = path.join(ugcDir, fileName);
-
-// Update references to UGC paths in your database
-// For example:
-await db.updateGuildSetting(guildId, `default_${type}_url`, `/ugc/${type}s/${fileName}`);
-// And
-await db.updateGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, `/ugc/${type}s/${fileName}`);
 
 // Handle user upload request
 async function handleUploadRequest(interaction, type, isStaff = false) {
@@ -231,10 +181,14 @@ async function processUploadedImage(message, sessionData) {
         // Send processing message
         await message.channel.send(`Processing your ${type}... Please wait.`);
 
-        // Create file paths
+        // Create file paths - updated to use absolute paths
         const fileName = `${isStaff ? 'guild' : userId}_${guildId}_${Date.now()}.png`;
-        const ugcDir = path.join(__dirname, '../data/ugc', `${type}s`);
+        const typePlural = type.endsWith('s') ? type : `${type}s`;
+        const ugcDir = path.resolve(__dirname, '../ugc', typePlural);
         const filePath = path.join(ugcDir, fileName);
+
+        // URL path for the file (to be stored in DB)
+        const urlPath = `/ugc/${typePlural}/${fileName}`;
 
         // Ensure directories exist
         ensureDirectoriesExist();
@@ -256,7 +210,7 @@ async function processUploadedImage(message, sessionData) {
 
         if (isStaff) {
             // Update guild setting
-            await db.updateGuildSetting(guildId, `default_${type}_url`, `/data/ugc/${type}s/${fileName}`);
+            await db.updateGuildSetting(guildId, `default_${type}_url`, urlPath);
 
             // Confirmation message
             const embed = new EmbedBuilder()
@@ -269,7 +223,7 @@ async function processUploadedImage(message, sessionData) {
             await message.channel.send({ embeds: [embed] });
         } else {
             // Update user setting
-            await db.updateGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, `/data/ugc/${type}s/${fileName}`);
+            await db.updateGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, urlPath);
 
             // Confirmation message
             const embed = new EmbedBuilder()
@@ -329,26 +283,11 @@ function getGuildDefaultPath(db, type, guildId) {
     }
 }
 
-/**
- * Helper function to get the URL path for where a file should be stored in DB
- * @param {string} userId - User ID
- * @param {string} guildId - Guild ID
- * @param {string} type - Content type
- * @param {boolean} isStaff - Whether this is a staff upload
- * @returns {string} URL path
- */
-function getUGCUrlPath(userId, guildId, type, isStaff = false) {
-    const { urlPath } = generateUGCPath(userId, guildId, type, isStaff);
-    return urlPath;
-}
-
 module.exports = {
     handleUploadRequest,
     processUploadedImage,
     getUserUGCPath,
     getGuildDefaultPath,
     activeSessions,
-    ensureDirectoriesExist,
-    generateUGCPath,
-    getUGCUrlPath
+    ensureDirectoriesExist
 };
