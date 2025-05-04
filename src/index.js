@@ -13,7 +13,10 @@ const config = require('./config');
 const { LevelingDB, XPCooldownManager, generateXP } = require('./levelingSystem');
 const { definitions: commandDefinitions, handlers: commandHandlers, setDatabase } = require('./commands');
 const { definitions: adminCommandDefinitions, handlers: adminCommandHandlers, setDatabase: setAdminDatabase } = require('./commandsAdmin');
+// Add import for UGC commands
+const { definitions: ugcCommandDefinitions, handlers: ugcCommandHandlers } = require('./commandsUGC');
 const { initializeUGCServer } = require('./ugc-server');
+const { processUploadedImage, activeSessions } = require('./ugc');
 
 // Validate critical configuration
 function validateConfig() {
@@ -49,7 +52,8 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.DirectMessages // Add this to handle DM uploads
     ]
 });
 
@@ -60,25 +64,12 @@ try {
     // Pass database to command handlers
     setDatabase(db);
     setAdminDatabase(db);
+    // Make the database accessible from the client
+    client.levelingDB = db;
     console.log('Database initialized successfully');
 } catch (error) {
     console.error('Failed to initialize database:', error);
     process.exit(1);
-}
-
-try {
-    const adminModule = require('./commandsAdmin');
-    if (adminModule.setDatabase) {
-        adminModule.setDatabase(db);
-    }
-    console.log('Admin command handlers connected to database');
-} catch (error) {
-    // If the module doesn't exist or doesn't have the expected structure,
-    // log a message but continue running the bot
-    console.log('Admin commands module not found or not properly structured. Admin commands will not be available.');
-    // Create empty structures to avoid undefined errors elsewhere
-    global.adminCommandDefinitions = [];
-    global.adminCommandHandlers = {};
 }
 
 try {
@@ -97,23 +88,12 @@ async function registerCommands() {
     try {
         console.log('Started refreshing application (/) commands.');
 
-        // Combine regular and admin command definitions
+        // Combine regular, admin, and UGC command definitions
         let allCommands = [
             ...commandDefinitions,
-            ...(adminCommandDefinitions || [])
+            ...(adminCommandDefinitions || []),
+            ...(ugcCommandDefinitions || []) // Add UGC commands
         ];
-
-        // Process the commands to handle BigInt permissions
-        allCommands = allCommands.map(cmd => {
-            const command = { ...cmd };
-
-            // Convert BigInt permissions to strings if they exist
-            if (command.defaultMemberPermissions) {
-                command.defaultMemberPermissions = command.defaultMemberPermissions.toString();
-            }
-
-            return command;
-        });
 
         console.log('Registering commands:', allCommands.map(cmd => cmd.name).join(', '));
 
@@ -150,9 +130,10 @@ client.on('interactionCreate', async interaction => {
 
     const { commandName } = interaction;
 
-    // Find handler for this command - check both regular and admin handlers
+    // Find handler for this command - check all handler types
     const handler = commandHandlers[commandName] ||
-        (adminCommandHandlers ? adminCommandHandlers[commandName] : undefined);
+        (adminCommandHandlers ? adminCommandHandlers[commandName] : undefined) ||
+        (ugcCommandHandlers ? ugcCommandHandlers[commandName] : undefined);
 
     if (handler) {
         try {
@@ -175,10 +156,21 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Process messages for XP
+// Handle DM messages for image uploads
 client.on('messageCreate', async message => {
-    // Ignore bot messages and DMs
-    if (message.author.bot || !message.guild) return;
+    // Processing for UGC uploads in DMs
+    if (message.channel.type === 1 && !message.author.bot) { // Type 1 is DM
+        // Check if there's an active upload session for this user
+        const sessionData = activeSessions.get(message.author.id);
+        if (sessionData) {
+            // Process the upload
+            await processUploadedImage(message, sessionData);
+            return; // Skip XP processing
+        }
+    }
+
+    // Only process XP in guilds
+    if (!message.guild || message.author.bot) return;
 
     // Get user ID
     const userId = message.author.id;
