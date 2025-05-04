@@ -90,36 +90,17 @@ try {
     console.error('Failed to initialize UGC server:', error);
 }
 
-
 const cooldownManager = new XPCooldownManager();
 
 // Function to register slash commands
 async function registerCommands() {
     try {
         console.log('Started refreshing application (/) commands.');
-        console.log('Registering commands:', commandDefinitions.map(cmd => cmd.name).join(', '));
 
-        const rest = new REST({ version: '10' }).setToken(config.bot.token);
-
-        await rest.put(
-            Routes.applicationCommands(config.bot.clientId),
-            { body: commandDefinitions }
-        );
-
-        console.log('Successfully reloaded application (/) commands.');
-    } catch (error) {
-        console.error('Error registering commands:', error);
-    }
-}
-
-async function registerCommands() {
-    try {
-        console.log('Started refreshing application (/) commands.');
-
-        // Combine regular and admin command definitions, checking if they exist
+        // Combine regular and admin command definitions
         const allCommands = [
             ...commandDefinitions,
-            ...(global.adminCommandDefinitions || [])
+            ...(adminCommandDefinitions || [])
         ];
 
         console.log('Registering commands:', allCommands.map(cmd => cmd.name).join(', '));
@@ -136,11 +117,6 @@ async function registerCommands() {
         console.error('Error registering commands:', error);
     }
 }
-
-// And when handling commands:
-// Find handler for this command
-const handler = commandHandlers[commandName] ||
-    (global.adminCommandHandlers ? global.adminCommandHandlers[commandName] : undefined);
 
 // When bot is ready
 client.once('ready', () => {
@@ -162,8 +138,9 @@ client.on('interactionCreate', async interaction => {
 
     const { commandName } = interaction;
 
-    // Find handler for this command
-    const handler = commandHandlers[commandName];
+    // Find handler for this command - check both regular and admin handlers
+    const handler = commandHandlers[commandName] ||
+        (adminCommandHandlers ? adminCommandHandlers[commandName] : undefined);
 
     if (handler) {
         try {
