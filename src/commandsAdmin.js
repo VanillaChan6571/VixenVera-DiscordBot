@@ -6,6 +6,7 @@ const config = require('./config');
 let db;
 
 // Command definitions for registration
+// Command definitions for registration
 const commandDefinitions = [
     {
         name: 'systoggle',
@@ -25,6 +26,28 @@ const commandDefinitions = [
             {
                 name: 'enabled',
                 description: 'Whether to enable or disable the feature',
+                type: ApplicationCommandOptionType.Boolean,
+                required: true
+            }
+        ]
+    },
+    {
+        name: 'sysguildonly',
+        description: 'Set a feature to only use server-defined content',
+        defaultMemberPermissions: PermissionFlagsBits.ManageGuild,
+        options: [
+            {
+                name: 'feature',
+                description: 'The feature to set to guild-only mode',
+                type: ApplicationCommandOptionType.String,
+                required: true,
+                choices: [
+                    { name: 'Banner', value: 'banner' }
+                ]
+            },
+            {
+                name: 'enabled',
+                description: 'Whether to enable or disable guild-only mode',
                 type: ApplicationCommandOptionType.Boolean,
                 required: true
             }
@@ -168,58 +191,6 @@ const commandHandlers = {
             await interaction.reply({ embeds: [embed] });
         } catch (error) {
             console.error('Error in sysguildonly command:', error);
-            await interaction.reply({
-                content: 'There was an error updating the settings.',
-                ephemeral: true
-            });
-        }
-    },
-
-    // sysguild command handler
-    async sysguild(interaction) {
-        if (!db) {
-            return await interaction.reply({
-                content: 'Database is not initialized. Please try again later.',
-                ephemeral: true
-            });
-        }
-
-        // Check if user has permissions
-        if (!hasAdminPermissions(interaction)) {
-            return await interaction.reply({
-                content: 'You do not have permission to use this command.',
-                ephemeral: true
-            });
-        }
-
-        const type = interaction.options.getString('type');
-        const url = interaction.options.getString('url');
-        const guildId = interaction.guild.id;
-
-        // Basic URL validation
-        if (!url.match(/^https?:\/\/.*\.(png|jpg|jpeg|gif|webp)$/i)) {
-            return await interaction.reply({
-                content: 'Invalid image URL. Please provide a direct link to an image (png, jpg, jpeg, gif, or webp).',
-                ephemeral: true
-            });
-        }
-
-        try {
-            // Update the setting in the database
-            const result = await db.updateGuildSetting(guildId, `default_${type}_url`, url);
-
-            // Create response embed
-            const embed = new EmbedBuilder()
-                .setColor('#00ff00')
-                .setTitle('Server Default Updated')
-                .setDescription(`Default server ${type} has been updated.`)
-                .setImage(url)
-                .setFooter({ text: 'Server Settings' })
-                .setTimestamp();
-
-            await interaction.reply({ embeds: [embed] });
-        } catch (error) {
-            console.error('Error in sysguild command:', error);
             await interaction.reply({
                 content: 'There was an error updating the settings.',
                 ephemeral: true

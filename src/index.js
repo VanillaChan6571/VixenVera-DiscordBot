@@ -12,6 +12,7 @@ const {
 const config = require('./config');
 const { LevelingDB, XPCooldownManager, generateXP } = require('./levelingSystem');
 const { definitions: commandDefinitions, handlers: commandHandlers, setDatabase } = require('./commands');
+const { definitions: adminCommandDefinitions, handlers: adminCommandHandlers, setDatabase: setAdminDatabase } = require('./commandsAdmin');
 const { initializeUGCServer } = require('./ugc-server');
 
 // Validate critical configuration
@@ -66,6 +67,21 @@ try {
 }
 
 try {
+    const adminModule = require('./commandsAdmin');
+    if (adminModule.setDatabase) {
+        adminModule.setDatabase(db);
+    }
+    console.log('Admin command handlers connected to database');
+} catch (error) {
+    // If the module doesn't exist or doesn't have the expected structure,
+    // log a message but continue running the bot
+    console.log('Admin commands module not found or not properly structured. Admin commands will not be available.');
+    // Create empty structures to avoid undefined errors elsewhere
+    global.adminCommandDefinitions = [];
+    global.adminCommandHandlers = {};
+}
+
+try {
     const ugcBaseUrl = initializeUGCServer();
     // Store the base URL on the client so it can be accessed throughout the application
     client.ugcBaseUrl = ugcBaseUrl;
@@ -95,6 +111,36 @@ async function registerCommands() {
         console.error('Error registering commands:', error);
     }
 }
+
+async function registerCommands() {
+    try {
+        console.log('Started refreshing application (/) commands.');
+
+        // Combine regular and admin command definitions, checking if they exist
+        const allCommands = [
+            ...commandDefinitions,
+            ...(global.adminCommandDefinitions || [])
+        ];
+
+        console.log('Registering commands:', allCommands.map(cmd => cmd.name).join(', '));
+
+        const rest = new REST({ version: '10' }).setToken(config.bot.token);
+
+        await rest.put(
+            Routes.applicationCommands(config.bot.clientId),
+            { body: allCommands }
+        );
+
+        console.log('Successfully reloaded application (/) commands.');
+    } catch (error) {
+        console.error('Error registering commands:', error);
+    }
+}
+
+// And when handling commands:
+// Find handler for this command
+const handler = commandHandlers[commandName] ||
+    (global.adminCommandHandlers ? global.adminCommandHandlers[commandName] : undefined);
 
 // When bot is ready
 client.once('ready', () => {
