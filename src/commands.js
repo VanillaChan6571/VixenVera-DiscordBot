@@ -102,15 +102,23 @@ const commandHandlers = {
             // Check for custom banner
             const customBanner = getUserUGCPath(db, 'banner', userId, guildId);
             if (customBanner) {
-                // Set image directly using URL from Express server
-                embed.setImage(customBanner);
+                // Get the server URL from the client
+                const baseUrl = interaction.client.ugcBaseUrl || 'http://localhost:2100';
+                // Create a full URL by combining base URL with path
+                const fullUrl = new URL(customBanner, baseUrl).toString();
+                // Set image using the full URL
+                embed.setImage(fullUrl);
             }
 
             // Check for custom avatar
             const customAvatar = getUserUGCPath(db, 'avatar', userId, guildId);
             if (customAvatar) {
-                // Set thumbnail directly using URL from Express server
-                embed.setThumbnail(customAvatar);
+                // Get the server URL from the client
+                const baseUrl = interaction.client.ugcBaseUrl || 'http://localhost:2100';
+                // Create a full URL by combining base URL with path
+                const fullUrl = new URL(customAvatar, baseUrl).toString();
+                // Set thumbnail using the full URL
+                embed.setThumbnail(fullUrl);
             } else {
                 // Default to Discord avatar
                 embed.setThumbnail(targetUser.displayAvatarURL({ dynamic: true }));
