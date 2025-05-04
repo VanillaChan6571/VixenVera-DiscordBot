@@ -13,10 +13,12 @@ const config = require('./config');
 const { LevelingDB, XPCooldownManager, generateXP } = require('./levelingSystem');
 const { definitions: commandDefinitions, handlers: commandHandlers, setDatabase } = require('./commands');
 const { definitions: adminCommandDefinitions, handlers: adminCommandHandlers, setDatabase: setAdminDatabase } = require('./commandsAdmin');
-// Add import for UGC commands
 const { definitions: ugcCommandDefinitions, handlers: ugcCommandHandlers } = require('./commandsUGC');
 const { initializeUGCServer } = require('./ugc-server');
 const { processUploadedImage, activeSessions } = require('./ugc');
+// New imports for setup command functionality
+const { definitions: setupCommandDefinitions, handlers: setupCommandHandlers, setDatabase: setSetupDatabase } = require('./commandsSetup');
+const { extendUGCCommands, handleReportRequest } = require('./ugc-report');
 
 // Validate critical configuration
 function validateConfig() {
@@ -64,6 +66,14 @@ try {
     // Pass database to command handlers
     setDatabase(db);
     setAdminDatabase(db);
+    // Connect setup commands to database
+    try {
+        setSetupDatabase(db);
+        console.log('Setup command handlers connected to database');
+    } catch (error) {
+        console.warn('Error connecting setup commands to database:', error.message);
+        console.log('Setup commands may not function correctly');
+    }
     // Make the database accessible from the client
     client.levelingDB = db;
     console.log('Database initialized successfully');
@@ -88,12 +98,18 @@ async function registerCommands() {
     try {
         console.log('Started refreshing application (/) commands.');
 
-        // Combine regular, admin, and UGC command definitions
+        // Combine regular, admin, setup, and UGC command definitions
         let allCommands = [
             ...commandDefinitions,
             ...(adminCommandDefinitions || []),
-            ...(ugcCommandDefinitions || []) // Add UGC commands
+            ...(setupCommandDefinitions || [])
         ];
+
+        // Get UGC commands and extend with report functionality
+        if (ugcCommandDefinitions) {
+            const extendedUGCCommands = extendUGCCommands(ugcCommandDefinitions);
+            allCommands = [...allCommands, ...extendedUGCCommands];
+        }
 
         // Process the commands to handle BigInt permissions
         allCommands = allCommands.map(cmd => {
@@ -140,11 +156,41 @@ client.once('ready', () => {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
+    // Check if command restrictions are enabled and enforce them
+    if (interaction.guild) {
+        const guildId = interaction.guild.id;
+        const channelId = interaction.channel.id;
+
+        // Skip system commands which are exempt from restrictions
+        const restrictedCommands = ['level', 'rank', 'leaderboard', 'xp-info'];
+
+        if (restrictedCommands.includes(interaction.commandName)) {
+            const restrictionsEnabled = db.getGuildSetting(guildId, 'command_restrictions_enabled', false);
+
+            if (restrictionsEnabled) {
+                const commandChannelId = db.getGuildSetting(guildId, 'command_channel_id', null);
+
+                if (commandChannelId && channelId !== commandChannelId) {
+                    return await interaction.reply({
+                        content: `This command can only be used in <#${commandChannelId}>.`,
+                        ephemeral: true
+                    });
+                }
+            }
+        }
+    }
+
     const { commandName } = interaction;
+
+    // For the UGC command, check if it's a report
+    if (commandName === 'ugc' && interaction.options.getString('type') === 'report') {
+        return await handleReportRequest(interaction);
+    }
 
     // Find handler for this command - check all handler types
     const handler = commandHandlers[commandName] ||
         (adminCommandHandlers ? adminCommandHandlers[commandName] : undefined) ||
+        (setupCommandHandlers ? setupCommandHandlers[commandName] : undefined) ||
         (ugcCommandHandlers ? ugcCommandHandlers[commandName] : undefined);
 
     if (handler) {
@@ -168,7 +214,7 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Handle DM messages for image uploads
+// Handle DM messages for image uploads and regular messages for XP
 client.on('messageCreate', async message => {
     // Processing for UGC uploads in DMs
     if (message.channel.type === 1 && !message.author.bot) { // Type 1 is DM
@@ -184,8 +230,32 @@ client.on('messageCreate', async message => {
     // Only process XP in guilds
     if (!message.guild || message.author.bot) return;
 
-    // Get user ID
+    // Skip XP checks if message is a command
+    if (message.content.startsWith('/')) return;
+
+    // Get user ID and channel ID
     const userId = message.author.id;
+    const channelId = message.channel.id;
+    const guildId = message.guild.id;
+
+    // Check XP channel settings
+    const xpMode = db.getGuildSetting(guildId, 'xp_channels_mode', 'disable');
+
+    // Skip if disabled
+    if (xpMode !== 'disable') {
+        const xpChannels = db.getGuildSetting(guildId, 'xp_channels_list', []);
+        const channelIds = xpChannels.map(c => c.id);
+
+        // Check if the channel is in the list
+        const channelInList = channelIds.includes(channelId);
+
+        // In whitelist mode, skip if channel is not in list
+        // In blacklist mode, skip if channel is in list
+        if ((xpMode === 'whitelist' && !channelInList) ||
+            (xpMode === 'blacklist' && channelInList)) {
+            return;
+        }
+    }
 
     // Check if user is on cooldown
     if (cooldownManager.isOnCooldown(userId)) return;
@@ -202,18 +272,60 @@ client.on('messageCreate', async message => {
         if (result.leveledUp && config.xp.levelUp.enabled) {
             // Check if level rewards are enabled
             const newLevel = result.newLevel;
-            let roleAwarded = null;
+            let roleAwarded = [];
 
-            // Check if there's a role reward for this level
-            if (config.xp.levelUp.rewards[newLevel]) {
+            // Get server-specific settings
+            const guildLevelUpChannel = db.getGuildSetting(message.guild.id, 'levelup_channel_id', null);
+            const guildLevelUpDM = db.getGuildSetting(message.guild.id, 'levelup_dm', null);
+            const guildLevelUpPing = db.getGuildSetting(message.guild.id, 'levelup_ping', null);
+
+            // Use server settings if available, otherwise fall back to global config
+            const useDM = guildLevelUpDM !== null ? guildLevelUpDM : config.xp.levelUp.dm;
+            const pingUser = guildLevelUpPing !== null ? guildLevelUpPing : config.xp.levelUp.pingUser;
+
+            // Get level rewards from guild settings
+            const guildRewards = db.getGuildSetting(message.guild.id, 'level_rewards', {});
+
+            // Check for legacy format or new format rewards
+            if (guildRewards[newLevel]) {
+                if (Array.isArray(guildRewards[newLevel])) {
+                    // New format - array of reward objects
+                    for (const reward of guildRewards[newLevel]) {
+                        const roleId = reward.roleId;
+                        const role = message.guild.roles.cache.get(roleId);
+
+                        if (role) {
+                            try {
+                                await message.member.roles.add(role);
+                                roleAwarded.push(role);
+                            } catch (err) {
+                                console.error(`Failed to add role ${roleId} to user ${userId}:`, err);
+                            }
+                        }
+                    }
+                } else {
+                    // Legacy format - single role ID string
+                    const roleId = guildRewards[newLevel];
+                    const role = message.guild.roles.cache.get(roleId);
+
+                    if (role) {
+                        try {
+                            await message.member.roles.add(role);
+                            roleAwarded.push(role);
+                        } catch (err) {
+                            console.error(`Failed to add role ${roleId} to user ${userId}:`, err);
+                        }
+                    }
+                }
+            } else if (config.xp.levelUp.rewards[newLevel]) {
+                // Fall back to global config if no guild rewards
                 const roleId = config.xp.levelUp.rewards[newLevel];
                 const role = message.guild.roles.cache.get(roleId);
 
-                // Give role if it exists
                 if (role) {
                     try {
                         await message.member.roles.add(role);
-                        roleAwarded = role;
+                        roleAwarded.push(role);
                     } catch (err) {
                         console.error(`Failed to add role ${roleId} to user ${userId}:`, err);
                     }
@@ -225,25 +337,33 @@ client.on('messageCreate', async message => {
                 .setColor('#00ff00')
                 .setTitle('Level Up!')
                 .setDescription(
-                    `Congratulations ${config.xp.levelUp.pingUser ? message.author : message.author.username}! ` +
+                    `Congratulations ${pingUser ? message.author : message.author.username}! ` +
                     `You've reached **Level ${newLevel}**!`
                 )
                 .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
                 .setTimestamp();
 
-            // Add role info if a role was awarded
-            if (roleAwarded) {
+            // Add role info if roles were awarded
+            if (roleAwarded.length > 0) {
+                const roleList = roleAwarded.map(r => r.name).join(', ');
                 levelUpEmbed.addFields({
-                    name: 'Reward Unlocked!',
-                    value: `You've been given the ${roleAwarded.name} role!`
+                    name: roleAwarded.length === 1 ? 'Reward Unlocked!' : 'Rewards Unlocked!',
+                    value: `You've been given the ${roleList} ${roleAwarded.length === 1 ? 'role' : 'roles'}!`
                 });
             }
 
             // Determine where to send level up message
             let channel = message.channel;
 
-            // Check for channel override
-            if (config.xp.levelUp.channelOverride) {
+            // Check for guild-specific channel override first
+            if (guildLevelUpChannel) {
+                const overrideChannel = client.channels.cache.get(guildLevelUpChannel);
+                if (overrideChannel) {
+                    channel = overrideChannel;
+                }
+            }
+            // If no guild override, check global config
+            else if (config.xp.levelUp.channelOverride) {
                 const overrideChannel = client.channels.cache.get(config.xp.levelUp.channelOverride);
                 if (overrideChannel) {
                     channel = overrideChannel;
@@ -251,7 +371,7 @@ client.on('messageCreate', async message => {
             }
 
             // Send as DM if configured
-            if (config.xp.levelUp.dm) {
+            if (useDM) {
                 try {
                     await message.author.send({ embeds: [levelUpEmbed] });
                 } catch (err) {
@@ -261,7 +381,10 @@ client.on('messageCreate', async message => {
                 }
             } else {
                 // Send in channel
-                channel.send({ embeds: [levelUpEmbed] });
+                channel.send({
+                    content: pingUser ? `<@${userId}>` : null,
+                    embeds: [levelUpEmbed]
+                });
             }
 
             // Check if user reached max level and is eligible for sacrifice
