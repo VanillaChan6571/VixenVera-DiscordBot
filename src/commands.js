@@ -99,30 +99,30 @@ const commandHandlers = {
                 .setColor('#0099ff')
                 .setTitle(`${targetUser.username}'s Level`);
 
+            // Get the server URL from the client
+            const baseUrl = interaction.client.ugcBaseUrl || 'http://localhost:2100';
+
             // Check for custom banner
-            const customBanner = getUserUGCPath(db, 'banner', userId, guildId);
-            if (customBanner) {
-                // Get the server URL from the client
-                const baseUrl = interaction.client.ugcBaseUrl || 'http://localhost:2100';
-                // Create a full URL by combining base URL with path
-                const fullUrl = new URL(customBanner, baseUrl).toString();
-                // Set image using the full URL
-                embed.setImage(fullUrl);
+            let bannerPath = getUserUGCPath(db, 'banner', userId, guildId);
+            if (bannerPath) {
+                try {
+                    // Create a full URL by combining base URL with path
+                    const fullUrl = new URL(bannerPath, baseUrl).toString();
+                    embed.setImage(fullUrl);
+                } catch (error) {
+                    console.error('Error setting banner image:', error);
+                    // If there's an error, try to use the default banner
+                    try {
+                        const defaultUrl = new URL('/ugc/defaults/banner.jpg', baseUrl).toString();
+                        embed.setImage(defaultUrl);
+                    } catch (e) {
+                        console.error('Error setting default banner:', e);
+                    }
+                }
             }
 
-            // Check for custom avatar
-            const customAvatar = getUserUGCPath(db, 'avatar', userId, guildId);
-            if (customAvatar) {
-                // Get the server URL from the client
-                const baseUrl = interaction.client.ugcBaseUrl || 'http://localhost:2100';
-                // Create a full URL by combining base URL with path
-                const fullUrl = new URL(customAvatar, baseUrl).toString();
-                // Set thumbnail using the full URL
-                embed.setThumbnail(fullUrl);
-            } else {
-                // Default to Discord avatar
-                embed.setThumbnail(targetUser.displayAvatarURL({ dynamic: true }));
-            }
+            // Set thumbnail to Discord avatar
+            embed.setThumbnail(targetUser.displayAvatarURL({ dynamic: true }));
 
             // Add fields
             embed.addFields(

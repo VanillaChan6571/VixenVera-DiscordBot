@@ -168,7 +168,7 @@ async function processUploadedImage(message, sessionData) {
         }
 
         // Check if it's an image
-        const validImageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        const validImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
         if (!validImageTypes.includes(attachment.contentType)) {
             message.channel.send('Please upload a valid image file (JPG, PNG, GIF, or WEBP). If you want to cancel, type "cancel".');
             return;
@@ -266,9 +266,25 @@ function getUserUGCPath(db, type, userId, guildId) {
         }
 
         // Fall back to guild default
-        return getGuildDefaultPath(db, type, guildId);
+        const guildDefault = getGuildDefaultPath(db, type, guildId);
+        if (guildDefault) {
+            return guildDefault;
+        }
+
+        // Fall back to system default only for banner
+        if (type === 'banner') {
+            return `/ugc/defaults/banner.jpg`;
+        }
+
+        return null;
     } catch (error) {
         console.error(`Error getting UGC path for ${userId} in ${guildId}:`, error);
+
+        // Return default banner on error, only for banner type
+        if (type === 'banner') {
+            return `/ugc/defaults/banner.jpg`;
+        }
+
         return null;
     }
 }

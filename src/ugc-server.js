@@ -18,6 +18,7 @@ function initializeUGCServer() {
             max_upload_size: 8,
             allowed_mime_types: [
                 'image/jpeg',
+                'image/jpg',
                 'image/png',
                 'image/gif',
                 'image/webp'

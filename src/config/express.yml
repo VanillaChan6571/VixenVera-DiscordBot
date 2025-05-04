@@ -24,6 +24,7 @@ security:
   # Content types allowed
   allowed_mime_types:
     - "image/jpeg"
+    - "image/jpg"
     - "image/png"
     - "image/gif"
     - "image/webp"
