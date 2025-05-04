@@ -16,24 +16,39 @@ const contentDimensions = {
     avatar: { width: 512, height: 512 }
 };
 
-// Create directories for UGC storage if they don't exist
+// Function to ensure UGC directories exist
 function ensureDirectoriesExist() {
-    const baseDir = path.join(__dirname, '../data/ugc');
+    // Use the main ugc directory at root level
+    const baseDir = path.join(__dirname, '../ugc');
     const types = ['avatars', 'banners'];
 
     if (!fs.existsSync(baseDir)) {
         fs.mkdirSync(baseDir, { recursive: true });
+        console.log(`Created UGC base directory: ${baseDir}`);
     }
 
     for (const type of types) {
         const typeDir = path.join(baseDir, type);
         if (!fs.existsSync(typeDir)) {
             fs.mkdirSync(typeDir, { recursive: true });
+            console.log(`Created UGC type directory: ${typeDir}`);
         }
     }
 
     console.log('UGC directories initialized');
+    return baseDir;
 }
+
+// When creating file paths for uploads, change:
+const fileName = `${isStaff ? 'guild' : userId}_${guildId}_${Date.now()}.png`;
+const ugcDir = path.join(__dirname, '../ugc', `${type}s`);
+const filePath = path.join(ugcDir, fileName);
+
+// Update references to UGC paths in your database
+// For example:
+await db.updateGuildSetting(guildId, `default_${type}_url`, `/ugc/${type}s/${fileName}`);
+// And
+await db.updateGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, `/ugc/${type}s/${fileName}`);
 
 // Handle user upload request
 async function handleUploadRequest(interaction, type, isStaff = false) {

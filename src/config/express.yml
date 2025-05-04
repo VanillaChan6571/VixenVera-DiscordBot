@@ -1,19 +1,17 @@
 # Express Server Configuration
 
-# HTTP server port
-port: 3000
+# HTTP server port (using your actual port)
+port: 2100
 
 # Public URL for accessing UGC content
-# Set this to the publicly accessible URL for your server
-# Examples:
-#   - http://your-domain-or-ip:3000
-#   - https://ugc.yourdomain.com
-public_url: "http://localhost:3000"
+# Set to your actual server address
+public_url: "http://localhost:2100"
 
 # Content directories
 content:
   # Base directory for user-generated content
-  ugc_dir: "../data/ugc"
+  # Changed to match your file system structure
+  ugc_dir: "../ugc"
 
   # URL path prefix for UGC files
   ugc_path: "/ugc"
@@ -21,7 +19,7 @@ content:
 # Security settings
 security:
   # Maximum allowed upload size in MB
-  max_upload_size: 8
+  max_upload_size: 10
 
   # Content types allowed
   allowed_mime_types:
