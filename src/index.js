@@ -344,7 +344,7 @@ client.on('messageCreate', async message => {
                 }
             }
 
-            // Create level up message
+            // Create level up message with banner and avatar
             const levelUpEmbed = new EmbedBuilder()
                 .setColor('#00ff00')
                 .setTitle('Level Up!')
@@ -355,6 +355,22 @@ client.on('messageCreate', async message => {
                 .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
                 .setTimestamp();
 
+            // Get the base URL from the client
+            const baseUrl = client.ugcBaseUrl || 'http://localhost:2100';
+
+            // Try to get the user's custom banner
+            const bannerPath = db.getUserUGCPath('banner', userId, guildId);
+            if (bannerPath) {
+                try {
+                    // Create a full URL by combining base URL with path
+                    const fullUrl = new URL(bannerPath, baseUrl).toString();
+                    console.log(`Adding banner to level-up message: ${fullUrl}`);
+                    levelUpEmbed.setImage(fullUrl);
+                } catch (error) {
+                    console.error('Error setting banner image for level-up:', error);
+                }
+            }
+
             // Add role info if roles were awarded
             if (roleAwarded.length > 0) {
                 const roleList = roleAwarded.map(r => r.name).join(', ');
@@ -363,6 +379,22 @@ client.on('messageCreate', async message => {
                     value: `You've been given the ${roleList} ${roleAwarded.length === 1 ? 'role' : 'roles'}!`
                 });
             }
+
+            // Add XP progress information
+            const currentXP = result.currentXP;
+            const nextLevelXP = db.xpForLevel(newLevel + 1);
+            const xpNeeded = nextLevelXP - currentXP;
+            const progressPercentage = Math.floor((currentXP / nextLevelXP) * 100);
+
+            // Create progress bar using the same function as in the /level command
+            const { createProgressBar } = require('./levelingSystem');
+            const progressBar = createProgressBar(progressPercentage);
+
+            // Add progress field to show how far they are to next level
+            levelUpEmbed.addFields({
+                name: 'Progress to Next Level',
+                value: `${progressBar} ${progressPercentage}%\n${currentXP}/${nextLevelXP} XP (${xpNeeded} more needed)`
+            });
 
             // Determine where to send level up message
             let channel = message.channel;
