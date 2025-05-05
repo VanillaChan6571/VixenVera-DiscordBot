@@ -103,17 +103,33 @@ const commandHandlers = {
             const baseUrl = interaction.client.ugcBaseUrl || 'http://localhost:2100';
 
             // Check for custom banner
+            console.log(`=== DEBUG: Banner for user ${userId} in guild ${guildId} ===`);
+            const userBannerPath = db.getGuildSetting(`user_${userId}_${guildId}`, 'banner_url', null);
+            const guildOnlyBanner = db.getGuildSetting(guildId, 'guild_only_banner', false);
+            const allowUserBanner = db.getGuildSetting(guildId, 'allow_user_banner', true);
+            const guildDefaultBanner = db.getGuildSetting(guildId, 'default_banner_url', null);
+
+            console.log('User banner path:', userBannerPath);
+            console.log('Guild-only mode:', guildOnlyBanner);
+            console.log('Allow user banner:', allowUserBanner);
+            console.log('Guild default banner:', guildDefaultBanner);
+
+            // Check for custom banner
             let bannerPath = getUserUGCPath(db, 'banner', userId, guildId);
+            console.log('Selected banner path:', bannerPath);
+
             if (bannerPath) {
                 try {
                     // Create a full URL by combining base URL with path
                     const fullUrl = new URL(bannerPath, baseUrl).toString();
+                    console.log('Full banner URL:', fullUrl);
                     embed.setImage(fullUrl);
                 } catch (error) {
                     console.error('Error setting banner image:', error);
                     // If there's an error, try to use the default banner
                     try {
                         const defaultUrl = new URL('/ugc/defaults/banner.jpg', baseUrl).toString();
+                        console.log('Falling back to default URL:', defaultUrl);
                         embed.setImage(defaultUrl);
                     } catch (e) {
                         console.error('Error setting default banner:', e);
