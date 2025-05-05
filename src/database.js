@@ -43,6 +43,7 @@ class LevelingDatabase {
             return defaultValue;
         }
     }
+
     // Update a guild setting
     async updateGuildSetting(guildId, settingKey, settingValue) {
         try {
@@ -80,7 +81,7 @@ class LevelingDatabase {
         }
     }
 
-// Get all settings for a guild
+    // Get all settings for a guild
     getAllGuildSettings(guildId) {
         try {
             const stmt = this.db.prepare('SELECT setting_key, setting_value FROM guild_settings WHERE guild_id = ?');
@@ -114,7 +115,7 @@ class LevelingDatabase {
         }
     }
 
-// Delete a guild setting
+    // Delete a guild setting
     deleteGuildSetting(guildId, settingKey) {
         try {
             const stmt = this.db.prepare('DELETE FROM guild_settings WHERE guild_id = ? AND setting_key = ?');
@@ -184,51 +185,217 @@ class LevelingDatabase {
         }
     }
 
-    // Create necessary tables
+    // Create necessary tables with improved schema
     createTables() {
         try {
-            // Create users table with COMPOSITE primary key
+            // Create users table for global data
             this.db.exec(`
-        CREATE TABLE IF NOT EXISTS users (
-          user_id TEXT NOT NULL,
-          guild_id TEXT NOT NULL DEFAULT 'global',
-          xp INTEGER NOT NULL DEFAULT 0,
-          level INTEGER NOT NULL DEFAULT 0,
-          last_message INTEGER NOT NULL DEFAULT 0,
-          first_seen INTEGER NOT NULL DEFAULT 0,
-          sacrifices INTEGER NOT NULL DEFAULT 0,
-          sacrifice_pending INTEGER NOT NULL DEFAULT 0,
-          PRIMARY KEY (user_id, guild_id)
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_users_xp ON users(xp DESC);
-        CREATE INDEX IF NOT EXISTS idx_users_level ON users(level DESC);
-        CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id);
-      `);
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    first_seen INTEGER NOT NULL DEFAULT 0
+                );
+            `);
+
+            // Create guild_users table for guild-specific data
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS guild_users (
+                    user_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL DEFAULT 'global',
+                    xp INTEGER NOT NULL DEFAULT 0,
+                    level INTEGER NOT NULL DEFAULT 0,
+                    last_message INTEGER NOT NULL DEFAULT 0,
+                    sacrifices INTEGER NOT NULL DEFAULT 0,
+                    sacrifice_pending INTEGER NOT NULL DEFAULT 0,
+                    banner_url TEXT,
+                    avatar_url TEXT,
+                    PRIMARY KEY (user_id, guild_id)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_guild_users_xp ON guild_users(xp DESC);
+                CREATE INDEX IF NOT EXISTS idx_guild_users_level ON guild_users(level DESC);
+                CREATE INDEX IF NOT EXISTS idx_guild_users_guild ON guild_users(guild_id);
+            `);
 
             // Create statistics table for future expansion
             this.db.exec(`
-        CREATE TABLE IF NOT EXISTS statistics (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-      `);
+                CREATE TABLE IF NOT EXISTS statistics (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+            `);
 
+            // Create guild_settings table
             this.db.exec(`
-    CREATE TABLE IF NOT EXISTS guild_settings
-    (
-        guild_id TEXT NOT NULL,
-        setting_key TEXT NOT NULL,
-        setting_value TEXT,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (guild_id, setting_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_guild_settings ON guild_settings(guild_id);
-`);
+                CREATE TABLE IF NOT EXISTS guild_settings (
+                    guild_id TEXT NOT NULL,
+                    setting_key TEXT NOT NULL,
+                    setting_value TEXT,
+                    created_at INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (guild_id, setting_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_guild_settings ON guild_settings(guild_id);
+            `);
+
+            // Check if we need to migrate legacy data
+            this.checkAndMigrateLegacyData();
+
             console.log('Database tables initialized');
         } catch (error) {
             console.error('Error creating tables:', error);
+            throw error;
+        }
+    }
+
+    // Check and migrate legacy data if needed
+    checkAndMigrateLegacyData() {
+        try {
+            // Check if legacy users table exists and has data
+            const legacyTableExists = this.db.prepare(`
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='users' 
+                AND sql LIKE '%guild_id%'
+            `).get();
+
+            if (legacyTableExists) {
+                console.log('Detected legacy database structure, checking for data to migrate...');
+
+                // Check if we have data to migrate
+                const userCount = this.db.prepare(`SELECT COUNT(*) as count FROM users`).get();
+
+                if (userCount.count > 0 && !this.hasAlreadyMigrated()) {
+                    console.log(`Found ${userCount.count} users to migrate. Starting migration...`);
+                    this.migrateLegacyData();
+                } else {
+                    console.log('No legacy data to migrate or migration already completed.');
+                }
+            }
+        } catch (error) {
+            console.error('Error checking for legacy data:', error);
+            // Continue without migration - not a critical error
+        }
+    }
+
+    // Check if we've already migrated
+    hasAlreadyMigrated() {
+        try {
+            const migrationDone = this.db.prepare(`
+                SELECT value FROM statistics WHERE key = 'migration_completed'
+            `).get();
+
+            return migrationDone && migrationDone.value === 'true';
+        } catch (error) {
+            return false;
+        }
+    }
+
+    // Migrate legacy data to new schema
+    migrateLegacyData() {
+        try {
+            console.log('Starting data migration...');
+
+            // Begin transaction for atomicity
+            this.db.exec('BEGIN TRANSACTION');
+
+            // Step 1: Create temporary table for users
+            this.db.exec(`
+                CREATE TEMPORARY TABLE temp_users AS
+                SELECT DISTINCT user_id, MIN(first_seen) as first_seen 
+                FROM users GROUP BY user_id
+            `);
+
+            // Step 2: Insert users into new global users table
+            const insertedUsers = this.db.prepare(`
+                INSERT INTO users (user_id, first_seen)
+                SELECT user_id, first_seen FROM temp_users
+            `).run();
+
+            console.log(`Migrated ${insertedUsers.changes} users to global table`);
+
+            // Step 3: Insert users guild data into guild_users table
+            const insertedGuildUsers = this.db.prepare(`
+                INSERT INTO guild_users (
+                    user_id, guild_id, xp, level, last_message, 
+                    sacrifices, sacrifice_pending
+                )
+                SELECT 
+                    user_id, guild_id, xp, level, last_message,
+                    COALESCE(sacrifices, 0), COALESCE(sacrifice_pending, 0)
+                FROM users
+            `).run();
+
+            console.log(`Migrated ${insertedGuildUsers.changes} user-guild relationships`);
+
+            // Step 4: Migrate UGC content (banners & avatars)
+            this.migrateLegacyUserContent();
+
+            // Step 5: Record that migration is complete
+            this.db.prepare(`
+                INSERT INTO statistics (key, value) VALUES ('migration_completed', 'true')
+            `).run();
+
+            // Clean up temporary table
+            this.db.exec(`DROP TABLE temp_users`);
+
+            // Commit transaction
+            this.db.exec('COMMIT');
+
+            console.log('Data migration completed successfully!');
+        } catch (error) {
+            // Rollback on error
+            this.db.exec('ROLLBACK');
+            console.error('Error during data migration:', error);
+            console.log('Database restored to previous state');
+        }
+    }
+
+    // Migrate legacy UGC content
+    migrateLegacyUserContent() {
+        try {
+            // Find banner/avatar URLs in guild_settings
+            const contentSettings = this.db.prepare(`
+                SELECT guild_id, setting_key, setting_value
+                FROM guild_settings
+                WHERE setting_key IN ('banner_url', 'avatar_url')
+                AND guild_id LIKE 'user_%'
+            `).all();
+
+            let migratedCount = 0;
+
+            // Prepare statement for updating user content
+            const updateStmt = this.db.prepare(`
+                UPDATE guild_users
+                SET banner_url = CASE WHEN ? = 'banner_url' THEN ? ELSE banner_url END,
+                    avatar_url = CASE WHEN ? = 'avatar_url' THEN ? ELSE avatar_url END
+                WHERE user_id = ? AND guild_id = ?
+            `);
+
+            for (const setting of contentSettings) {
+                // Parse user_id and guild_id from settings key
+                // Format is typically user_USER_ID_GUILD_ID
+                const idParts = setting.guild_id.split('_');
+                if (idParts.length >= 3) {
+                    const userId = idParts[1];
+                    // The guild ID is typically the last part
+                    const guildId = idParts[idParts.length - 1];
+
+                    // Update the appropriate field
+                    updateStmt.run(
+                        setting.setting_key,
+                        setting.setting_value,
+                        setting.setting_key,
+                        setting.setting_value,
+                        userId,
+                        guildId
+                    );
+
+                    migratedCount++;
+                }
+            }
+
+            console.log(`Migrated ${migratedCount} user content URLs`);
+        } catch (error) {
+            console.error('Error migrating legacy user content:', error);
             throw error;
         }
     }
@@ -271,31 +438,55 @@ class LevelingDatabase {
         }
     }
 
-    // Ensure a user exists in the database
+    // Ensure a user exists in the database (improved version)
     ensureUser(userId, guildId = 'global') {
         const now = Date.now();
 
         try {
-            // Prepare statements for better performance
-            const getUserStmt = this.db.prepare('SELECT * FROM users WHERE user_id = ? AND guild_id = ?');
-            const insertUserStmt = this.db.prepare(`
-        INSERT OR IGNORE INTO users (user_id, guild_id, xp, level, last_message, first_seen)
-        VALUES (?, ?, 0, 0, ?, ?)
-      `);
+            // Begin transaction
+            const transaction = this.db.transaction(() => {
+                // Step 1: Ensure user exists in global table
+                const checkGlobalUserStmt = this.db.prepare(`
+                    SELECT * FROM users WHERE user_id = ?
+                `);
 
-            // Check if user exists
-            let user = getUserStmt.get(userId, guildId);
+                const insertGlobalUserStmt = this.db.prepare(`
+                    INSERT OR IGNORE INTO users (user_id, first_seen)
+                    VALUES (?, ?)
+                `);
 
-            // If not, create them
-            if (!user) {
-                // Use INSERT OR IGNORE to avoid constraint errors
-                insertUserStmt.run(userId, guildId, now, now);
+                let globalUser = checkGlobalUserStmt.get(userId);
+                if (!globalUser) {
+                    insertGlobalUserStmt.run(userId, now);
+                    globalUser = checkGlobalUserStmt.get(userId);
+                }
 
-                // Get the user after insertion
-                user = getUserStmt.get(userId, guildId);
-            }
+                // Step 2: Ensure user exists in guild_users table
+                const checkGuildUserStmt = this.db.prepare(`
+                    SELECT * FROM guild_users WHERE user_id = ? AND guild_id = ?
+                `);
 
-            return user;
+                const insertGuildUserStmt = this.db.prepare(`
+                    INSERT OR IGNORE INTO guild_users 
+                    (user_id, guild_id, xp, level, last_message)
+                    VALUES (?, ?, 0, 0, ?)
+                `);
+
+                let guildUser = checkGuildUserStmt.get(userId, guildId);
+                if (!guildUser) {
+                    insertGuildUserStmt.run(userId, guildId, now);
+                    guildUser = checkGuildUserStmt.get(userId, guildId);
+                }
+
+                // Return combined data
+                return {
+                    ...globalUser,
+                    ...guildUser
+                };
+            });
+
+            // Execute transaction
+            return transaction();
         } catch (error) {
             console.error('Error ensuring user exists:', error);
             throw error;
@@ -312,7 +503,34 @@ class LevelingDatabase {
         }
     }
 
-    // Add XP to user and update level
+    // Get a user's rank position
+    getUserRank(userId, guildId = 'global') {
+        try {
+            // Make sure user exists
+            this.ensureUser(userId, guildId);
+
+            // Get rank - updated for new schema
+            const getRankStmt = this.db.prepare(`
+                SELECT (
+                    SELECT COUNT(*)
+                    FROM guild_users
+                    WHERE guild_id = ? AND xp > (
+                        SELECT xp
+                        FROM guild_users
+                        WHERE user_id = ? AND guild_id = ?
+                    )
+                ) + 1 as rank
+            `);
+
+            const {rank} = getRankStmt.get(guildId, userId, guildId);
+            return rank;
+        } catch (error) {
+            console.error('Error getting user rank:', error);
+            throw error;
+        }
+    }
+
+    // Add XP to user and update level - updated for new schema
     addXP(userId, xpAmount, guildId = 'global') {
         try {
             // Ensure the user exists first
@@ -320,25 +538,25 @@ class LevelingDatabase {
 
             const now = Date.now();
 
-            // Prepare statements
+            // Prepare statements - updated for new schema
             const updateXPStmt = this.db.prepare(`
-        UPDATE users
-        SET xp = xp + ?,
-            last_message = ?
-        WHERE user_id = ? AND guild_id = ?
-      `);
+                UPDATE guild_users
+                SET xp = xp + ?,
+                    last_message = ?
+                WHERE user_id = ? AND guild_id = ?
+            `);
 
             const getUserStmt = this.db.prepare(`
-        SELECT *
-        FROM users
-        WHERE user_id = ? AND guild_id = ?
-      `);
+                SELECT *
+                FROM guild_users
+                WHERE user_id = ? AND guild_id = ?
+            `);
 
             const updateLevelStmt = this.db.prepare(`
-        UPDATE users
-        SET level = ?
-        WHERE user_id = ? AND guild_id = ?
-      `);
+                UPDATE guild_users
+                SET level = ?
+                WHERE user_id = ? AND guild_id = ?
+            `);
 
             // Execute transaction for atomic operations
             const transaction = this.db.transaction(() => {
@@ -375,26 +593,26 @@ class LevelingDatabase {
         }
     }
 
-    // Get leaderboard data
+    // Get leaderboard data - updated for new schema
     getLeaderboard(page = 1, pageSize = config.leaderboard.pageSize, guildId = 'global') {
         try {
             const offset = (page - 1) * pageSize;
 
-            // Get users for this page
+            // Get users for this page - updated for new schema
             const getUsersStmt = this.db.prepare(`
-        SELECT user_id, xp, level
-        FROM users
-        WHERE guild_id = ?
-        ORDER BY xp DESC
-        LIMIT ? OFFSET ?
-      `);
+                SELECT user_id, xp, level
+                FROM guild_users
+                WHERE guild_id = ?
+                ORDER BY xp DESC
+                LIMIT ? OFFSET ?
+            `);
 
-            // Count total users
+            // Count total users - updated for new schema
             const countUsersStmt = this.db.prepare(`
-        SELECT COUNT(*) as count
-        FROM users
-        WHERE guild_id = ?
-      `);
+                SELECT COUNT(*) as count
+                FROM guild_users
+                WHERE guild_id = ?
+            `);
 
             // Get users
             const users = getUsersStmt.all(guildId, pageSize, offset);
@@ -417,33 +635,6 @@ class LevelingDatabase {
             };
         } catch (error) {
             console.error('Error getting leaderboard:', error);
-            throw error;
-        }
-    }
-
-    // Get user's rank position
-    getUserRank(userId, guildId = 'global') {
-        try {
-            // Make sure user exists
-            this.ensureUser(userId, guildId);
-
-            // Get rank
-            const getRankStmt = this.db.prepare(`
-        SELECT (
-          SELECT COUNT(*)
-          FROM users
-          WHERE guild_id = ? AND xp > (
-            SELECT xp
-            FROM users
-            WHERE user_id = ? AND guild_id = ?
-          )
-        ) + 1 as rank
-      `);
-
-            const { rank } = getRankStmt.get(guildId, userId, guildId);
-            return rank;
-        } catch (error) {
-            console.error('Error getting user rank:', error);
             throw error;
         }
     }
@@ -568,7 +759,7 @@ class LevelingDatabase {
         return level;
     }
 
-    // Add a new method for the sacrifice system
+    // Add a new method for the sacrifice system - updated for new schema
     async sacrificeUser(userId, guildId = 'global') {
         try {
             // Get the current user data
@@ -585,15 +776,15 @@ class LevelingDatabase {
 
             // Check if user has already confirmed sacrifice
             if (userData.sacrifice_pending === 1) {
-                // Perform the sacrifice
+                // Perform the sacrifice - updated for new schema
                 const sacrificeStmt = this.db.prepare(`
-          UPDATE users
-          SET level = 1, 
-              xp = ?, 
-              sacrifices = sacrifices + 1,
-              sacrifice_pending = 0
-          WHERE user_id = ? AND guild_id = ?
-        `);
+                    UPDATE guild_users
+                    SET level = 1, 
+                        xp = ?, 
+                        sacrifices = sacrifices + 1,
+                        sacrifice_pending = 0
+                    WHERE user_id = ? AND guild_id = ?
+                `);
 
                 // Get the XP needed for level 1
                 const level1XP = this.xpForLevel(1);
@@ -607,12 +798,12 @@ class LevelingDatabase {
                     sacrificeCount: userData.sacrifices + 1
                 };
             } else {
-                // Set pending flag for confirmation
+                // Set pending flag for confirmation - updated for new schema
                 const pendingStmt = this.db.prepare(`
-          UPDATE users
-          SET sacrifice_pending = 1
-          WHERE user_id = ? AND guild_id = ?
-        `);
+                    UPDATE guild_users
+                    SET sacrifice_pending = 1
+                    WHERE user_id = ? AND guild_id = ?
+                `);
 
                 pendingStmt.run(userId, guildId);
 
@@ -629,7 +820,7 @@ class LevelingDatabase {
         }
     }
 
-    // Add method to check if a user is eligible for sacrifice prompt
+    // Add method to check if a user is eligible for sacrifice prompt - updated for new schema
     isEligibleForSacrificePrompt(userId, guildId = 'global') {
         try {
             // Get user data
@@ -645,20 +836,174 @@ class LevelingDatabase {
         }
     }
 
-    // Add method to reset sacrifice pending flag (for timeout)
+    // Add method to reset sacrifice pending flag (for timeout) - updated for new schema
     resetSacrificePending(userId, guildId = 'global') {
         try {
             const resetStmt = this.db.prepare(`
-        UPDATE users
-        SET sacrifice_pending = 0
-        WHERE user_id = ? AND guild_id = ?
-      `);
+                UPDATE guild_users
+                SET sacrifice_pending = 0
+                WHERE user_id = ? AND guild_id = ?
+            `);
 
             resetStmt.run(userId, guildId);
             return true;
         } catch (error) {
             console.error('Error resetting sacrifice pending:', error);
             return false;
+        }
+    }
+
+    // NEW METHODS FOR UGC CONTENT
+
+    /**
+     * Get a user's banner URL
+     * @param {string} userId User ID
+     * @param {string} guildId Guild ID
+     * @returns {string|null} Banner URL or null
+     */
+    getUserBanner(userId, guildId) {
+        try {
+            // Ensure user exists
+            this.ensureUser(userId, guildId);
+
+            // Get banner URL directly
+            const getBannerStmt = this.db.prepare(`
+                SELECT banner_url FROM guild_users
+                WHERE user_id = ? AND guild_id = ?
+            `);
+
+            const result = getBannerStmt.get(userId, guildId);
+            return result ? result.banner_url : null;
+        } catch (error) {
+            console.error('Error getting user banner:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Set a user's banner URL
+     * @param {string} userId User ID
+     * @param {string} guildId Guild ID
+     * @param {string} bannerUrl Banner URL
+     * @returns {boolean} Success
+     */
+    setUserBanner(userId, guildId, bannerUrl) {
+        try {
+            // Ensure user exists
+            this.ensureUser(userId, guildId);
+
+            // Update banner URL
+            const updateBannerStmt = this.db.prepare(`
+                UPDATE guild_users
+                SET banner_url = ?
+                WHERE user_id = ? AND guild_id = ?
+            `);
+
+            const result = updateBannerStmt.run(bannerUrl, userId, guildId);
+            return result.changes > 0;
+        } catch (error) {
+            console.error('Error setting user banner:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Get a user's avatar URL
+     * @param {string} userId User ID
+     * @param {string} guildId Guild ID
+     * @returns {string|null} Avatar URL or null
+     */
+    getUserAvatar(userId, guildId) {
+        try {
+            // Ensure user exists
+            this.ensureUser(userId, guildId);
+
+            // Get avatar URL directly
+            const getAvatarStmt = this.db.prepare(`
+                SELECT avatar_url FROM guild_users
+                WHERE user_id = ? AND guild_id = ?
+            `);
+
+            const result = getAvatarStmt.get(userId, guildId);
+            return result ? result.avatar_url : null;
+        } catch (error) {
+            console.error('Error getting user avatar:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Set a user's avatar URL
+     * @param {string} userId User ID
+     * @param {string} guildId Guild ID
+     * @param {string} avatarUrl Avatar URL
+     * @returns {boolean} Success
+     */
+    setUserAvatar(userId, guildId, avatarUrl) {
+        try {
+            // Ensure user exists
+            this.ensureUser(userId, guildId);
+
+            // Update avatar URL
+            const updateAvatarStmt = this.db.prepare(`
+                UPDATE guild_users
+                SET avatar_url = ?
+                WHERE user_id = ? AND guild_id = ?
+            `);
+
+            const result = updateAvatarStmt.run(avatarUrl, userId, guildId);
+            return result.changes > 0;
+        } catch (error) {
+            console.error('Error setting user avatar:', error);
+            return false;
+        }
+    }
+
+    // Backward compatibility wrapper for legacy code that uses the old approach
+    getUserUGCPath(type, userId, guildId) {
+        try {
+            // First check if the server is in guild-only mode
+            const guildOnly = this.getGuildSetting(guildId, `guild_only_${type}`, false);
+
+            // Get user content path directly from the new table
+            let userPath = null;
+            if (type === 'banner') {
+                userPath = this.getUserBanner(userId, guildId);
+            } else if (type === 'avatar') {
+                userPath = this.getUserAvatar(userId, guildId);
+            }
+
+            const userContentAllowed = this.getGuildSetting(guildId, `allow_user_${type}`, true);
+
+            // Use user content if:
+            // 1. User has uploaded content
+            // 2. Server is NOT in guild-only mode
+            // 3. User content is allowed
+            if (userPath && !guildOnly && userContentAllowed) {
+                return userPath;
+            }
+
+            // Fall back to guild default
+            const guildDefault = this.getGuildSetting(guildId, `default_${type}_url`, null);
+            if (guildDefault) {
+                return guildDefault;
+            }
+
+            // Fall back to system default only for banner
+            if (type === 'banner') {
+                return `/ugc/defaults/banner.jpg`;
+            }
+
+            return null;
+        } catch (error) {
+            console.error(`Error getting UGC path for ${userId} in ${guildId}:`, error);
+
+            // Return default banner on error, only for banner type
+            if (type === 'banner') {
+                return `/ugc/defaults/banner.jpg`;
+            }
+
+            return null;
         }
     }
 }

@@ -223,8 +223,15 @@ async function processUploadedImage(message, sessionData) {
         const db = message.client.levelingDB;
 
         if (isStaff) {
-            // Update guild setting
+            // Update guild setting - this method is unchanged
             await db.updateGuildSetting(guildId, `default_${type}_url`, urlPath);
+
+            // Make sure we're not automatically setting guild-only mode
+            // This ensures user banners can still be shown
+            const guildOnly = db.getGuildSetting(guildId, `guild_only_${type}`, false);
+            if (guildOnly) {
+                await message.channel.send("⚠️ **Note:** Your server is in 'Server-Only' mode, which forces all users to use this banner. If you want to allow users to use their own banners, use `/systoggle feature:banner mode:allow_user`");
+            }
 
             // Confirmation message
             const embed = new EmbedBuilder()
@@ -236,8 +243,14 @@ async function processUploadedImage(message, sessionData) {
 
             await message.channel.send({ embeds: [embed] });
         } else {
-            // Update user setting
-            await db.updateGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, urlPath);
+            // Update user setting - use the new dedicated methods
+            if (type === 'banner') {
+                // Use the new method instead of updateGuildSetting
+                await db.setUserBanner(userId, guildId, urlPath);
+            } else if (type === 'avatar') {
+                // Use the new method instead of updateGuildSetting
+                await db.setUserAvatar(userId, guildId, urlPath);
+            }
 
             // Confirmation message
             const embed = new EmbedBuilder()
