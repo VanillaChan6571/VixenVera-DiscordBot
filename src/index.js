@@ -18,6 +18,7 @@ const { initializeUGCServer } = require('./ugc-server');
 const { processUploadedImage, activeSessions } = require('./ugc');
 // New imports for setup command functionality
 const { definitions: setupCommandDefinitions, handlers: setupCommandHandlers, setDatabase: setSetupDatabase } = require('./commandsSetup');
+const { definitions: debugCommandDefinitions, handlers: debugCommandHandlers, setDatabase: setDebugDatabase } = require('./commandsDebug');
 const { extendUGCCommands, handleReportRequest } = require('./ugc-report');
 const { setupReportHandlers } = require('./report-utils');
 
@@ -75,6 +76,12 @@ try {
         console.warn('Error connecting setup commands to database:', error.message);
         console.log('Setup commands may not function correctly');
     }
+    try {
+        setDebugDatabase(db);
+        console.log('Debug command handlers connected to database');
+    } catch (error) {
+        console.warn('Error connecting debug commands to database:', error.message);
+    }
     // Make the database accessible from the client
     client.levelingDB = db;
     setupReportHandlers(client);
@@ -105,7 +112,8 @@ async function registerCommands() {
         let allCommands = [
             ...commandDefinitions,
             ...(adminCommandDefinitions || []),
-            ...(setupCommandDefinitions || [])
+            ...(setupCommandDefinitions || []),
+            ...(debugCommandDefinitions || [])
         ];
 
         // Get UGC commands and extend with report functionality
@@ -194,7 +202,8 @@ client.on('interactionCreate', async interaction => {
     const handler = commandHandlers[commandName] ||
         (adminCommandHandlers ? adminCommandHandlers[commandName] : undefined) ||
         (setupCommandHandlers ? setupCommandHandlers[commandName] : undefined) ||
-        (ugcCommandHandlers ? ugcCommandHandlers[commandName] : undefined);
+        (ugcCommandHandlers ? ugcCommandHandlers[commandName] : undefined) ||
+        (debugCommandHandlers ? debugCommandHandlers[commandName] : undefined);
 
     if (handler) {
         try {
