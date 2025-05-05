@@ -102,9 +102,11 @@ const commandHandlers = {
             // Get the server URL from the client
             const baseUrl = interaction.client.ugcBaseUrl || 'http://localhost:2100';
 
-            // Check for custom banner
+            // Check for custom banner using direct database methods
             console.log(`=== DEBUG: Banner for user ${userId} in guild ${guildId} ===`);
-            const userBannerPath = db.getGuildSetting(`user_${userId}_${guildId}`, 'banner_url', null);
+
+            // Use direct database functions
+            const userBannerPath = db.getUserBanner(userId, guildId);
             const guildOnlyBanner = db.getGuildSetting(guildId, 'guild_only_banner', false);
             const allowUserBanner = db.getGuildSetting(guildId, 'allow_user_banner', true);
             const guildDefaultBanner = db.getGuildSetting(guildId, 'default_banner_url', null);
@@ -114,8 +116,8 @@ const commandHandlers = {
             console.log('Allow user banner:', allowUserBanner);
             console.log('Guild default banner:', guildDefaultBanner);
 
-            // Check for custom banner
-            let bannerPath = getUserUGCPath(db, 'banner', userId, guildId);
+            // Check for custom banner using our utility function
+            let bannerPath = db.getUserUGCPath('banner', userId, guildId);
             console.log('Selected banner path:', bannerPath);
 
             if (bannerPath) {
@@ -137,6 +139,7 @@ const commandHandlers = {
                 }
             }
 
+            // Rest of the function remains the same...
             // Set thumbnail to Discord avatar
             embed.setThumbnail(targetUser.displayAvatarURL({ dynamic: true }));
 

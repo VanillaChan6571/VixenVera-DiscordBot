@@ -54,12 +54,13 @@ async function handleUploadRequest(interaction, type, isStaff = false) {
                 });
             }
 
-            if (isUserGloballyBlacklisted(db, interaction.user.id)) {
+            // Use the direct database method instead of getGuildSetting
+            if (db.isUserGloballyBlacklisted(interaction.user.id)) {
                 return await interaction.reply({
                     content: `${interaction.user} System has banned you from Uploading Anything regardless if your staff or a normal user. You have been reported by multiple admins or for other reasons. This cannot be reverted.`,
                     ephemeral: true
                 });
-            } else if (isUserContentBlacklisted(db, interaction.user.id, guildId)) {
+            } else if (db.isUserGuildBlacklisted(interaction.user.id, guildId)) {
                 return await interaction.reply({
                     content: 'You have been blacklisted from uploading custom content in this server due to previous violations.',
                     ephemeral: true
@@ -287,12 +288,20 @@ function getGuildDefaultPath(db, type, guildId) {
     }
 }
 
-// FIXED VERSION - Get UGC path for a user
+// Fix getUserUGCPath function to use the direct database methods for user content
 function getUserUGCPath(db, type, userId, guildId) {
     try {
         // Get all relevant settings and log them for debugging
         const guildOnly = db.getGuildSetting(guildId, `guild_only_${type}`, false);
-        const userPath = db.getGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, null);
+
+        // Use direct database methods instead of getGuildSetting for user content
+        let userPath = null;
+        if (type === 'banner') {
+            userPath = db.getUserBanner(userId, guildId);
+        } else if (type === 'avatar') {
+            userPath = db.getUserAvatar(userId, guildId);
+        }
+
         const userContentAllowed = db.getGuildSetting(guildId, `allow_user_${type}`, true);
         const guildDefault = getGuildDefaultPath(db, type, guildId);
 

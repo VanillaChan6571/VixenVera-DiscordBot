@@ -528,8 +528,8 @@ function isUserContentBlacklisted(db, userId, guildId) {
             return true;
         }
 
-        // Then check server-specific blacklist
-        return db.getGuildSetting(`user_${userId}_${guildId}`, 'content_blacklisted', false);
+        // Then check server-specific blacklist - using the new method
+        return db.isUserGuildBlacklisted(userId, guildId);
     } catch (error) {
         console.error('Error checking if user is blacklisted:', error);
         return false;
@@ -544,7 +544,8 @@ function isUserContentBlacklisted(db, userId, guildId) {
  */
 function isUserGloballyBlacklisted(db, userId) {
     try {
-        return db.getGuildSetting('global', `blacklist_user_${userId}`, false);
+        // Direct check in users_global table
+        return db.isUserGloballyBlacklisted(userId);
     } catch (error) {
         console.error('Error checking if user is globally blacklisted:', error);
         return false;

@@ -47,10 +47,10 @@ class LevelingDatabase {
             // Setup auto-save interval for WAL mode
             this.setupAutoSave();
 
-            console.log(`Connected to SQLite database: ${this.config.path}`);
+            // Apply backward compatibility fixes
+            this.fixGuildSettingCompatibility();
 
-            // Check if we need to migrate legacy data
-            this.checkAndMigrateLegacyData();
+            console.log(`Connected to SQLite database: ${this.config.path}`);
         } catch (error) {
             console.error('Error initializing database:', error);
             throw error; // Re-throw to make the error visible
@@ -75,7 +75,7 @@ class LevelingDatabase {
     }
 
     /**
-     * Create core tables (users_global and statistics)
+     * Create core tables (users_global, settings_global, and statistics)
      */
     createCoreTables() {
         try {
@@ -90,6 +90,16 @@ class LevelingDatabase {
                     blacklisted_at INTEGER,
                     blacklisted_by TEXT,
                     last_updated INTEGER NOT NULL DEFAULT 0
+                );
+            `);
+
+            // Create settings_global table
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS settings_global (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT,
+                    created_at INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL DEFAULT 0
                 );
             `);
 
@@ -115,6 +125,32 @@ class LevelingDatabase {
      */
     ensureGuildTables(guildId) {
         try {
+            // Special handling for global settings
+            if (guildId === 'global') {
+                // No need to create guild-specific tables for 'global'
+                // Instead, make sure the settings_global table exists
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS settings_global (
+                        setting_key TEXT PRIMARY KEY,
+                        setting_value TEXT,
+                        created_at INTEGER NOT NULL DEFAULT 0,
+                        updated_at INTEGER NOT NULL DEFAULT 0
+                    );
+                `);
+                return;
+            }
+
+            // Validate the guild ID is a proper Discord ID (numeric)
+            if (!/^\d+$/.test(guildId)) {
+                throw new Error(`Invalid guild ID format: ${guildId}`);
+            }
+
+            // Check if this is a user-specific pattern (old format) that should be skipped
+            if (guildId.startsWith('user_')) {
+                console.warn(`Attempted to create tables for invalid guild ID: ${guildId}`);
+                return;
+            }
+
             // Check our cache first to avoid repeated DB checks
             if (this.guildTablesCache.has(guildId)) {
                 return;
@@ -212,6 +248,46 @@ class LevelingDatabase {
      */
     getGuildSetting(guildId, settingKey, defaultValue = null) {
         try {
+
+            // Handle global settings specially
+            if (guildId === 'global') {
+                try {
+                    const stmt = this.db.prepare(`
+                        SELECT setting_value FROM settings_global 
+                        WHERE setting_key = ?
+                    `);
+                    const result = stmt.get(settingKey);
+
+                    if (result) {
+                        // Process the result just like regular guild settings
+                        if (result.setting_value.startsWith('{') || result.setting_value.startsWith('[')) {
+                            try {
+                                return JSON.parse(result.setting_value);
+                            } catch (e) {
+                                return result.setting_value;
+                            }
+                        }
+
+                        if (result.setting_value === 'true') return true;
+                        if (result.setting_value === 'false') return false;
+
+                        return result.setting_value;
+                    }
+                } catch (e) {
+                    // Handle the case where the table doesn't exist yet
+                    console.log('Global settings table may not exist yet, returning default value');
+                }
+
+                return defaultValue;
+            }
+
+            // Regular guild setting
+            // Validate the guild ID
+            if (!/^\d+$/.test(guildId)) {
+                console.warn(`Invalid guild ID format in getGuildSetting: ${guildId}`);
+                return defaultValue;
+            }
+
             // Ensure guild tables exist
             this.ensureGuildTables(guildId);
 
@@ -252,6 +328,57 @@ class LevelingDatabase {
      */
     async updateGuildSetting(guildId, settingKey, settingValue) {
         try {
+
+            // Handle global settings specially
+            if (guildId === 'global') {
+                const now = Date.now();
+
+                // Create the global settings table if it doesn't exist
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS settings_global (
+                        setting_key TEXT PRIMARY KEY,
+                        setting_value TEXT,
+                        created_at INTEGER NOT NULL DEFAULT 0,
+                        updated_at INTEGER NOT NULL DEFAULT 0
+                    );
+                `);
+
+                // Convert values just like with regular settings
+                let valueToStore = settingValue;
+
+                if (typeof valueToStore === 'object' && valueToStore !== null) {
+                    valueToStore = JSON.stringify(valueToStore);
+                }
+
+                if (typeof valueToStore === 'boolean') {
+                    valueToStore = valueToStore.toString();
+                }
+
+                const stmt = this.db.prepare(`
+                    INSERT INTO settings_global (setting_key, setting_value, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(setting_key) DO UPDATE SET
+                    setting_value = excluded.setting_value,
+                    updated_at = excluded.updated_at
+                `);
+
+                stmt.run(settingKey, valueToStore, now, now);
+
+                return {
+                    success: true,
+                    guildId: 'global',
+                    settingKey,
+                    settingValue
+                };
+            }
+
+            // Regular guild setting
+            // Validate the guild ID
+            if (!/^\d+$/.test(guildId)) {
+                console.warn(`Invalid guild ID format in updateGuildSetting: ${guildId}`);
+                throw new Error(`Invalid guild ID format: ${guildId}`);
+            }
+
             // Ensure guild tables exist
             this.ensureGuildTables(guildId);
 
@@ -1037,6 +1164,7 @@ class LevelingDatabase {
      */
     isUserGloballyBlacklisted(userId) {
         try {
+            // Don't try to use ensureGuildTables for global settings
             const stmt = this.db.prepare(`
                 SELECT is_blacklisted FROM users_global
                 WHERE user_id = ?
@@ -1250,7 +1378,7 @@ class LevelingDatabase {
     }
 
     /**
-     * Get UGC path for a user (compatible with old version)
+     * Get UGC path for a user
      * @param {string} type - Content type (banner/avatar)
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
@@ -1314,325 +1442,199 @@ class LevelingDatabase {
             return null;
         }
     }
+    /**
+     * This utility function can be added to the database.js file
+     * It provides a way to access the old format "global" settings with the new structure
+     *
+     * @param {string} key - The setting key to get
+     * @param {any} defaultValue - Default value if setting doesn't exist
+     * @returns {any} - The setting value
+     */
+    getGlobalSetting(key, defaultValue = null) {
+        try {
+            // Make sure the global settings table exists
+            this.db.exec(`
+            CREATE TABLE IF NOT EXISTS settings_global (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        `);
+
+            const stmt = this.db.prepare(`
+            SELECT setting_value FROM settings_global 
+            WHERE setting_key = ?
+        `);
+
+            const result = stmt.get(key);
+
+            if (result) {
+                // Process the result
+                if (result.setting_value.startsWith('{') || result.setting_value.startsWith('[')) {
+                    try {
+                        return JSON.parse(result.setting_value);
+                    } catch (e) {
+                        return result.setting_value;
+                    }
+                }
+
+                if (result.setting_value === 'true') return true;
+                if (result.setting_value === 'false') return false;
+
+                return result.setting_value;
+            }
+
+            return defaultValue;
+        } catch (error) {
+            console.error(`Error getting global setting ${key}:`, error);
+            return defaultValue;
+        }
+    }
+
+    /**
+     * This utility function can be added to the database.js file
+     * It provides a way to update global settings with the new structure
+     *
+     * @param {string} key - The setting key to update
+     * @param {any} value - The new value
+     * @returns {boolean} - Success of the operation
+     */
+    /**
+     * Get global setting
+     * @param {string} key - Setting key
+     * @param {any} defaultValue - Default value if not found
+     * @returns {any} Setting value
+     */
+    getGlobalSetting(key, defaultValue = null) {
+        try {
+            // Make sure the global settings table exists
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS settings_global (
+                                                               setting_key TEXT PRIMARY KEY,
+                                                               setting_value TEXT,
+                                                               created_at INTEGER NOT NULL DEFAULT 0,
+                                                               updated_at INTEGER NOT NULL DEFAULT 0
+                );
+            `);
+
+            const stmt = this.db.prepare(`
+            SELECT setting_value FROM settings_global 
+            WHERE setting_key = ?
+        `);
+
+            const result = stmt.get(key);
+
+            if (result) {
+                // Process the result
+                if (result.setting_value.startsWith('{') || result.setting_value.startsWith('[')) {
+                    try {
+                        return JSON.parse(result.setting_value);
+                    } catch (e) {
+                        return result.setting_value;
+                    }
+                }
+
+                if (result.setting_value === 'true') return true;
+                if (result.setting_value === 'false') return false;
+
+                return result.setting_value;
+            }
+
+            return defaultValue;
+        } catch (error) {
+            console.error(`Error getting global setting ${key}:`, error);
+            return defaultValue;
+        }
+    }
+
+    /**
+     * Set global setting
+     * @param {string} key - Setting key
+     * @param {any} value - Setting value
+     * @returns {boolean} Success
+     */
+    setGlobalSetting(key, value) {
+        try {
+            // Make sure the global settings table exists
+            this.db.exec(`
+            CREATE TABLE IF NOT EXISTS settings_global (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        `);
+
+            const now = Date.now();
+
+            // Convert complex values to strings for storage
+            let valueToStore = value;
+
+            if (typeof valueToStore === 'object' && valueToStore !== null) {
+                valueToStore = JSON.stringify(valueToStore);
+            }
+
+            if (typeof valueToStore === 'boolean') {
+                valueToStore = valueToStore.toString();
+            }
+
+            const stmt = this.db.prepare(`
+            INSERT INTO settings_global (setting_key, setting_value, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(setting_key) DO UPDATE SET
+            setting_value = excluded.setting_value,
+            updated_at = excluded.updated_at
+        `);
+
+            stmt.run(key, valueToStore, now, now);
+
+            return true;
+        } catch (error) {
+            console.error(`Error setting global setting ${key}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Backward compatibility method to maintain compatibility with old code
+     * that uses getGuildSetting with 'global' as the guild ID
+     */
+    fixGuildSettingCompatibility() {
+        const oldGetGuildSetting = this.getGuildSetting;
+
+        this.getGuildSetting = (guildId, settingKey, defaultValue = null) => {
+            // If global is used as guild ID, use the global setting method
+            if (guildId === 'global') {
+                return this.getGlobalSetting(settingKey, defaultValue);
+            }
+
+            // Otherwise use the normal method
+            return oldGetGuildSetting.call(this, guildId, settingKey, defaultValue);
+        };
+
+        const oldUpdateGuildSetting = this.updateGuildSetting;
+
+        this.updateGuildSetting = async (guildId, settingKey, settingValue) => {
+            // If global is used as guild ID, use the global setting method
+            if (guildId === 'global') {
+                const success = this.setGlobalSetting(settingKey, settingValue);
+                return {
+                    success,
+                    guildId: 'global',
+                    settingKey,
+                    settingValue
+                };
+            }
+
+            // Otherwise use the normal method
+            return oldUpdateGuildSetting.call(this, guildId, settingKey, settingValue);
+        };
+    }
 
     // MIGRATION FUNCTIONS
 
-    /**
-     * Check if we need to migrate legacy data
-     */
-    checkAndMigrateLegacyData() {
-        try {
-            // Check if migration is already done
-            if (this.getStatistic('migration_completed', false)) {
-                console.log('Migration already completed, skipping...');
-                return;
-            }
 
-            // Check if old tables exist
-            const hasGuildSettings = this.db.prepare(`
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='guild_settings'
-            `).get();
-
-            const hasGuildUsers = this.db.prepare(`
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='guild_users'
-            `).get();
-
-            const hasUsers = this.db.prepare(`
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='users'
-            `).get();
-
-            if (hasGuildSettings || hasGuildUsers || hasUsers) {
-                console.log('Legacy tables found, starting migration...');
-                this.migrateLegacyData();
-            } else {
-                console.log('No legacy data found, marking migration as completed');
-                this.saveStatistic('migration_completed', true);
-            }
-        } catch (error) {
-            console.error('Error checking for legacy data:', error);
-        }
-    }
-
-    /**
-     * Migrate data from old schema to new schema
-     */
-    migrateLegacyData() {
-        try {
-            console.log('Starting database migration...');
-
-            // Begin transaction
-            this.db.exec('BEGIN TRANSACTION');
-
-            // 1. Migrate users table to users_global
-            this.migrateGlobalUsers();
-
-            // 2. Migrate guild_users to per-guild user tables
-            this.migrateGuildUsers();
-
-            // 3. Migrate guild_settings to per-guild settings tables
-            this.migrateGuildSettings();
-
-            // Mark migration as completed
-            this.saveStatistic('migration_completed', true);
-
-            // Commit transaction
-            this.db.exec('COMMIT');
-
-            console.log('Database migration completed successfully!');
-        } catch (error) {
-            // Rollback on error
-            this.db.exec('ROLLBACK');
-            console.error('Error during database migration:', error);
-            console.log('Database restored to previous state');
-        }
-    }
-
-    /**
-     * Migrate users from global users table
-     */
-    migrateGlobalUsers() {
-        try {
-            // Check if old users table exists
-            const hasTable = this.db.prepare(`
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='users'
-            `).get();
-
-            if (!hasTable) {
-                console.log('No global users table found, skipping...');
-                return;
-            }
-
-            // Get all unique user IDs from the users table
-            const userIds = this.db.prepare(`
-                SELECT DISTINCT user_id, MIN(first_seen) as first_seen
-                FROM users
-            `).all();
-
-            console.log(`Found ${userIds.length} global users to migrate`);
-
-            // Insert each user into users_global
-            const insertStmt = this.db.prepare(`
-                INSERT OR IGNORE INTO users_global 
-                (user_id, first_seen, last_updated)
-                VALUES (?, ?, ?)
-            `);
-
-            for (const user of userIds) {
-                insertStmt.run(user.user_id, user.first_seen || Date.now(), Date.now());
-            }
-
-            console.log(`Migrated ${userIds.length} users to users_global table`);
-        } catch (error) {
-            console.error('Error migrating global users:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Migrate users from guild_users table
-     */
-    migrateGuildUsers() {
-        try {
-            // Check if old guild_users table exists
-            const hasTable = this.db.prepare(`
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='guild_users'
-            `).get();
-
-            if (!hasTable) {
-                console.log('No guild_users table found, skipping...');
-                return;
-            }
-
-            // Get all unique guild IDs from the guild_users table
-            const guildIds = this.db.prepare(`
-                SELECT DISTINCT guild_id FROM guild_users
-                WHERE guild_id != 'global'
-            `).all();
-
-            console.log(`Found ${guildIds.length} guilds with users to migrate`);
-
-            // Process each guild
-            for (const { guild_id } of guildIds) {
-                if (guild_id === 'global') continue;
-
-                // Ensure the new guild tables exist
-                this.ensureGuildTables(guild_id);
-
-                // Get all users for this guild
-                const guildUsers = this.db.prepare(`
-                    SELECT * FROM guild_users
-                    WHERE guild_id = ?
-                `).all(guild_id);
-
-                console.log(`Migrating ${guildUsers.length} users for guild ${guild_id}`);
-
-                // Insert each user into the new guild table
-                const insertStmt = this.db.prepare(`
-                    INSERT OR IGNORE INTO users_${guild_id}
-                    (user_id, xp, level, last_message, sacrifices, sacrifice_pending, 
-                     banner_url, avatar_url, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `);
-
-                for (const user of guildUsers) {
-                    const now = Date.now();
-                    insertStmt.run(
-                        user.user_id,
-                        user.xp || 0,
-                        user.level || 0,
-                        user.last_message || 0,
-                        user.sacrifices || 0,
-                        user.sacrifice_pending || 0,
-                        user.banner_url || null,
-                        user.avatar_url || null,
-                        now,
-                        now
-                    );
-                }
-            }
-
-            console.log('Guild users migration completed');
-        } catch (error) {
-            console.error('Error migrating guild users:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Migrate settings from guild_settings table
-     */
-    migrateGuildSettings() {
-        try {
-            // Check if old guild_settings table exists
-            const hasTable = this.db.prepare(`
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='guild_settings'
-            `).get();
-
-            if (!hasTable) {
-                console.log('No guild_settings table found, skipping...');
-                return;
-            }
-
-            // Get all unique guild IDs from the guild_settings table
-            const guildIds = this.db.prepare(`
-                SELECT DISTINCT guild_id FROM guild_settings
-                WHERE guild_id NOT LIKE 'user_%'
-            `).all();
-
-            console.log(`Found ${guildIds.length} guilds with settings to migrate`);
-
-            // Process each guild
-            for (const { guild_id } of guildIds) {
-                // Skip legacy user settings (handled in migrateGuildUsers)
-                if (guild_id.startsWith('user_')) continue;
-
-                // Ensure the new guild tables exist
-                this.ensureGuildTables(guild_id);
-
-                // Get all settings for this guild
-                const guildSettings = this.db.prepare(`
-                    SELECT * FROM guild_settings
-                    WHERE guild_id = ?
-                `).all(guild_id);
-
-                console.log(`Migrating ${guildSettings.length} settings for guild ${guild_id}`);
-
-                // Insert each setting into the new settings table
-                const insertStmt = this.db.prepare(`
-                    INSERT OR IGNORE INTO settings_${guild_id}
-                    (setting_key, setting_value, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
-                `);
-
-                for (const setting of guildSettings) {
-                    insertStmt.run(
-                        setting.setting_key,
-                        setting.setting_value,
-                        setting.created_at || Date.now(),
-                        setting.updated_at || Date.now()
-                    );
-                }
-            }
-
-            // Handle special case for user-specific settings
-            this.migrateUserSettings();
-
-            console.log('Guild settings migration completed');
-        } catch (error) {
-            console.error('Error migrating guild settings:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Migrate user-specific settings from guild_settings table
-     */
-    migrateUserSettings() {
-        try {
-            // Get all user-specific settings (format: user_USERID_GUILDID)
-            const userSettings = this.db.prepare(`
-                SELECT * FROM guild_settings
-                WHERE guild_id LIKE 'user_%'
-            `).all();
-
-            console.log(`Found ${userSettings.length} user-specific settings to migrate`);
-
-            let migratedCount = 0;
-
-            // Process each setting
-            for (const setting of userSettings) {
-                // Parse user_id and guild_id from the guild_id field
-                const idParts = setting.guild_id.split('_');
-                if (idParts.length >= 3) {
-                    const userId = idParts[1];
-                    const guildId = idParts[idParts.length - 1];
-
-                    // Ensure the guild tables exist
-                    this.ensureGuildTables(guildId);
-
-                    // Determine what type of setting this is
-                    if (setting.setting_key === 'banner_url') {
-                        this.setUserBanner(userId, guildId, setting.setting_value);
-                        migratedCount++;
-                    }
-                    else if (setting.setting_key === 'avatar_url') {
-                        this.setUserAvatar(userId, guildId, setting.setting_value);
-                        migratedCount++;
-                    }
-                    else if (setting.setting_key === 'warning_count') {
-                        // Update warning count
-                        const updateWarningsStmt = this.db.prepare(`
-                            UPDATE users_${guildId}
-                            SET warning_count = ?,
-                                updated_at = ?
-                            WHERE user_id = ?
-                        `);
-
-                        const warningCount = parseInt(setting.setting_value) || 0;
-                        updateWarningsStmt.run(warningCount, Date.now(), userId);
-                        migratedCount++;
-                    }
-                    else if (setting.setting_key === 'content_blacklisted') {
-                        // Update blacklist status
-                        const isBlacklisted = setting.setting_value === 'true';
-                        this.setGuildUserBlacklist(userId, guildId, isBlacklisted);
-                        migratedCount++;
-                    }
-                }
-            }
-
-            console.log(`Migrated ${migratedCount} user-specific settings`);
-        } catch (error) {
-            console.error('Error migrating user settings:', error);
-            throw error;
-        }
-    }
 }
 
 module.exports = LevelingDatabase;
