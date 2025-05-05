@@ -264,45 +264,6 @@ async function processUploadedImage(message, sessionData) {
     }
 }
 
-// Get UGC path for a user if available
-function getUserUGCPath(db, type, userId, guildId) {
-    try {
-        // First check if user content is allowed
-        if (!isUserContentAllowed(db, type, guildId)) {
-            return getGuildDefaultPath(db, type, guildId);
-        }
-
-        // Then check if user has custom content
-        const userPath = db.getGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, null);
-
-        if (userPath) {
-            return userPath;
-        }
-
-        // Fall back to guild default
-        const guildDefault = getGuildDefaultPath(db, type, guildId);
-        if (guildDefault) {
-            return guildDefault;
-        }
-
-        // Fall back to system default only for banner
-        if (type === 'banner') {
-            return `/ugc/defaults/banner.jpg`;
-        }
-
-        return null;
-    } catch (error) {
-        console.error(`Error getting UGC path for ${userId} in ${guildId}:`, error);
-
-        // Return default banner on error, only for banner type
-        if (type === 'banner') {
-            return `/ugc/defaults/banner.jpg`;
-        }
-
-        return null;
-    }
-}
-
 // Get guild default UGC path
 function getGuildDefaultPath(db, type, guildId) {
     try {
@@ -313,29 +274,31 @@ function getGuildDefaultPath(db, type, guildId) {
     }
 }
 
-// Get UGC path for a user if available
+// FIXED VERSION - Get UGC path for a user
 function getUserUGCPath(db, type, userId, guildId) {
     try {
-        // First check if the user has custom content, regardless of settings
-        // This maintains existing user content even if new uploads are disabled
+        // First check if the server is in guild-only mode
+        const guildOnly = db.getGuildSetting(guildId, `guild_only_${type}`, false);
+
+        // Get user content path if it exists
         const userPath = db.getGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, null);
+        const userContentAllowed = db.getGuildSetting(guildId, `allow_user_${type}`, true);
 
-        // Check if user content is allowed
-        const isUserContentAllowed = !db.getGuildSetting(guildId, `guild_only_${type}`, false) &&
-            db.getGuildSetting(guildId, `allow_user_${type}`, true);
-
-        // If user has content AND user content is allowed, use it
-        if (userPath && isUserContentAllowed) {
+        // Use user content if:
+        // 1. User has uploaded content
+        // 2. Server is NOT in guild-only mode
+        // 3. User content is allowed
+        if (userPath && !guildOnly && userContentAllowed) {
             return userPath;
         }
 
-        // Second priority: Fall back to guild default
+        // Fall back to guild default
         const guildDefault = getGuildDefaultPath(db, type, guildId);
         if (guildDefault) {
             return guildDefault;
         }
 
-        // Third priority: Fall back to system default only for banner
+        // Fall back to system default only for banner
         if (type === 'banner') {
             return `/ugc/defaults/banner.jpg`;
         }
