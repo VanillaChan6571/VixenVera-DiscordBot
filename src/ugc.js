@@ -313,6 +313,46 @@ function getGuildDefaultPath(db, type, guildId) {
     }
 }
 
+// Get UGC path for a user if available
+function getUserUGCPath(db, type, userId, guildId) {
+    try {
+        // First check if the user has custom content, regardless of settings
+        // This maintains existing user content even if new uploads are disabled
+        const userPath = db.getGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, null);
+
+        // Check if user content is allowed
+        const isUserContentAllowed = !db.getGuildSetting(guildId, `guild_only_${type}`, false) &&
+            db.getGuildSetting(guildId, `allow_user_${type}`, true);
+
+        // If user has content AND user content is allowed, use it
+        if (userPath && isUserContentAllowed) {
+            return userPath;
+        }
+
+        // Second priority: Fall back to guild default
+        const guildDefault = getGuildDefaultPath(db, type, guildId);
+        if (guildDefault) {
+            return guildDefault;
+        }
+
+        // Third priority: Fall back to system default only for banner
+        if (type === 'banner') {
+            return `/ugc/defaults/banner.jpg`;
+        }
+
+        return null;
+    } catch (error) {
+        console.error(`Error getting UGC path for ${userId} in ${guildId}:`, error);
+
+        // Return default banner on error, only for banner type
+        if (type === 'banner') {
+            return `/ugc/defaults/banner.jpg`;
+        }
+
+        return null;
+    }
+}
+
 /**
  * Handle admin upload request for setting server-wide default content
  * @param {Object} interaction - The interaction that triggered the command
