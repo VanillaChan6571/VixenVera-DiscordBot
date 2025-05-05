@@ -81,6 +81,23 @@ const commandDefinitions = [
         ]
     },
     {
+        name: 'sysdebug',
+        description: 'Debug guild settings',
+        defaultMemberPermissions: PermissionFlagsBits.ManageGuild,
+        options: [
+            {
+                name: 'action',
+                description: 'What action to take',
+                type: ApplicationCommandOptionType.String,
+                required: true,
+                choices: [
+                    { name: 'Check Settings', value: 'check' },
+                    { name: 'Fix Settings', value: 'fix' }
+                ]
+            }
+        ]
+    },
+    {
         name: 'syscall',
         description: 'Owner-only system commands',
         defaultMemberPermissions: PermissionFlagsBits.Administrator,
@@ -329,6 +346,82 @@ const commandHandlers = {
             console.error('Error in sysguild command:', error);
             await interaction.reply({
                 content: 'There was an error updating the settings.',
+                ephemeral: true
+            });
+        }
+    },
+    // Add this to commandHandlers object
+    async sysdebug(interaction) {
+        if (!db) {
+            return await interaction.reply({
+                content: 'Database is not initialized. Please try again later.',
+                ephemeral: true
+            });
+        }
+
+        // Check if user has permissions
+        if (!hasAdminPermissions(interaction)) {
+            return await interaction.reply({
+                content: 'You do not have permission to use this command.',
+                ephemeral: true
+            });
+        }
+
+        const action = interaction.options.getString('action');
+        const guildId = interaction.guild.id;
+
+        try {
+            if (action === 'check') {
+                // Get all relevant settings
+                const guildOnlyBanner = db.getGuildSetting(guildId, 'guild_only_banner', false);
+                const allowUserBanner = db.getGuildSetting(guildId, 'allow_user_banner', true);
+                const guildOnlyAvatar = db.getGuildSetting(guildId, 'guild_only_avatar', false);
+                const allowUserAvatar = db.getGuildSetting(guildId, 'allow_user_avatar', true);
+                const defaultBannerUrl = db.getGuildSetting(guildId, 'default_banner_url', null);
+                const defaultAvatarUrl = db.getGuildSetting(guildId, 'default_avatar_url', null);
+
+                // Create response embed
+                const embed = new EmbedBuilder()
+                    .setColor('#00aaff')
+                    .setTitle('Guild UGC Settings')
+                    .addFields(
+                        { name: 'Banner Settings', value:
+                                `Guild-only mode: ${guildOnlyBanner ? '✅ ON' : '❌ OFF'}\n` +
+                                `Allow user content: ${allowUserBanner ? '✅ ON' : '❌ OFF'}\n` +
+                                `Default banner: ${defaultBannerUrl ? '✅ Set' : '❌ Not set'}`
+                        },
+                        { name: 'Avatar Settings', value:
+                                `Guild-only mode: ${guildOnlyAvatar ? '✅ ON' : '❌ OFF'}\n` +
+                                `Allow user content: ${allowUserAvatar ? '✅ ON' : '❌ OFF'}\n` +
+                                `Default avatar: ${defaultAvatarUrl ? '✅ Set' : '❌ Not set'}`
+                        }
+                    )
+                    .setFooter({ text: `Guild ID: ${guildId}` })
+                    .setTimestamp();
+
+                return await interaction.reply({ embeds: [embed] });
+            }
+            else if (action === 'fix') {
+                // Turn off guild-only mode and enable user content
+                await db.updateGuildSetting(guildId, 'guild_only_banner', false);
+                await db.updateGuildSetting(guildId, 'allow_user_banner', true);
+                await db.updateGuildSetting(guildId, 'guild_only_avatar', false);
+                await db.updateGuildSetting(guildId, 'allow_user_avatar', true);
+
+                // Create response embed
+                const embed = new EmbedBuilder()
+                    .setColor('#00ff00')
+                    .setTitle('Guild UGC Settings Fixed')
+                    .setDescription('All content settings have been reset to allow users to use their custom content.')
+                    .setFooter({ text: `Guild ID: ${guildId}` })
+                    .setTimestamp();
+
+                return await interaction.reply({ embeds: [embed] });
+            }
+        } catch (error) {
+            console.error('Error in sysdebug command:', error);
+            return await interaction.reply({
+                content: 'There was an error processing the debug command.',
                 ephemeral: true
             });
         }

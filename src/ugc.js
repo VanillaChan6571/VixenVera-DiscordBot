@@ -277,32 +277,43 @@ function getGuildDefaultPath(db, type, guildId) {
 // FIXED VERSION - Get UGC path for a user
 function getUserUGCPath(db, type, userId, guildId) {
     try {
-        // First check if the server is in guild-only mode
+        // Get all relevant settings and log them for debugging
         const guildOnly = db.getGuildSetting(guildId, `guild_only_${type}`, false);
-
-        // Get user content path if it exists
         const userPath = db.getGuildSetting(`user_${userId}_${guildId}`, `${type}_url`, null);
         const userContentAllowed = db.getGuildSetting(guildId, `allow_user_${type}`, true);
+        const guildDefault = getGuildDefaultPath(db, type, guildId);
+
+        // Log all the relevant settings
+        console.log(`=== DEBUG: getUserUGCPath for user ${userId} in guild ${guildId} ===`);
+        console.log(`Content type: ${type}`);
+        console.log(`Guild-only mode: ${guildOnly}`);
+        console.log(`User has content: ${userPath !== null}`);
+        console.log(`User content path: ${userPath}`);
+        console.log(`User content allowed: ${userContentAllowed}`);
+        console.log(`Guild default path: ${guildDefault}`);
 
         // Use user content if:
         // 1. User has uploaded content
         // 2. Server is NOT in guild-only mode
         // 3. User content is allowed
         if (userPath && !guildOnly && userContentAllowed) {
+            console.log('DECISION: Using user content');
             return userPath;
         }
 
         // Fall back to guild default
-        const guildDefault = getGuildDefaultPath(db, type, guildId);
         if (guildDefault) {
+            console.log('DECISION: Using guild default');
             return guildDefault;
         }
 
         // Fall back to system default only for banner
         if (type === 'banner') {
+            console.log('DECISION: Using system default banner');
             return `/ugc/defaults/banner.jpg`;
         }
 
+        console.log('DECISION: No content available');
         return null;
     } catch (error) {
         console.error(`Error getting UGC path for ${userId} in ${guildId}:`, error);
